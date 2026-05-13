@@ -93,7 +93,7 @@ async def run_blocking(func: Callable[..., T], /, *args, **kwargs) -> T:
     # that mutate the config singleton between calls see the new value
     # without having to reload this module.
     if get_config().run_blocking_by_asyncio_thread_enabled:
-        logger.info("MZA: %s is running by asyncio.to_thread", func.__name__)
+        logger.debug("%s is running by asyncio.to_thread", func.__name__)
         # functools.partial binds kwargs cleanly; asyncio.to_thread accepts
         # *args/**kwargs directly, but going through partial keeps the
         # call site readable and makes the closure easy to log if needed.
