@@ -5,8 +5,7 @@ from docx import Document
 from upload_tools import upload_file
 from .helpers import (
     load_templates,
-    parse_inline_formatting,
-    process_markdown_block,
+    process_markdown_content,
     set_header_footer,
     add_toc,
 )
@@ -58,74 +57,13 @@ def _markdown_to_doc(markdown_content, title=None, author=None, subject=None,
         set_header_footer(doc, footer_text, 'footer')
 
     # Parse markdown content into document
-    lines = markdown_content.split('\n')
-    n = len(lines)
-    i = 0
-    blocks_count = 0
-
     try:
-        while i < n:
-            line = lines[i]
-
-            # --- Empty line handling (preserve spacing) ---
-            if not line.strip():
-                empty_line_count = 1
-                i += 1
-
-                while i < n and not lines[i].strip():
-                    empty_line_count += 1
-                    i += 1
-
-                # Two or more consecutive empty lines → insert spacing paragraphs
-                if empty_line_count >= 2:
-                    for _ in range(empty_line_count - 1):
-                        doc.add_paragraph()
-                continue
-
-            # --- Soft line breaks (trailing two spaces) ---
-            # Markdown convention: a line ending with two spaces means a soft
-            # break within the same paragraph. Collect consecutive lines that
-            # are joined by this mechanism.
-            if line.endswith('  '):
-                paragraph_lines = []
-                while i < n:
-                    current_line = lines[i]
-                    if not current_line.strip():
-                        break
-                    paragraph_lines.append(current_line)
-                    i += 1
-                    if not current_line.endswith('  '):
-                        break
-
-                full_text = '  \n'.join(paragraph_lines)
-                first_line = paragraph_lines[0].strip()
-
-                if first_line.startswith('#'):
-                    stripped_hashes = first_line.lstrip('#')
-                    level = len(first_line) - len(stripped_hashes)
-                    heading = doc.add_heading('', level=min(level, 6))
-                    parse_inline_formatting(stripped_hashes.strip(), heading)
-                elif first_line.startswith('>'):
-                    quote_text = full_text[1:].strip()
-                    quote_paragraph = doc.add_paragraph()
-                    quote_paragraph.style = 'Quote'
-                    parse_inline_formatting(quote_text, quote_paragraph)
-                else:
-                    paragraph = doc.add_paragraph()
-                    parse_inline_formatting(full_text, paragraph)
-
-                blocks_count += 1
-                continue
-
-            # --- All other block elements: delegate to shared processor ---
-            i, _ = process_markdown_block(doc, lines, i, return_element=False)
-            blocks_count += 1
-
+        process_markdown_content(doc, markdown_content, return_elements=False)
     except Exception as e:
         logger.error(f"Error in parsing markdown: {e}", exc_info=True)
         raise RuntimeError(f"Error in parsing markdown: {e}") from e
 
-    logger.info(f"Markdown parsing completed ({blocks_count} blocks processed)")
+    logger.info("Markdown parsing completed")
     return doc
 
 
