@@ -441,7 +441,10 @@ class TestAutoFilter:
 
         wb = load_workbook(io.BytesIO(captured['data']))
         ws = wb.active
-        assert ws.auto_filter.ref == "A1:B3"
+        # Now uses Excel Table objects (each table has its own filter)
+        assert len(ws.tables) == 1
+        table = list(ws.tables.values())[0]
+        assert table.ref == "A1:B3"
 
     def test_auto_filter_disabled_by_default(self):
         """By default, no auto-filter is applied."""
@@ -451,7 +454,7 @@ class TestAutoFilter:
 """
         wb = _create_workbook_from_markdown(markdown)
         ws = wb.active
-        assert ws.auto_filter.ref is None or ws.auto_filter.ref == ""
+        assert len(ws.tables) == 0
 
     def test_auto_filter_multi_sheet(self):
         """Auto-filter works on multi-sheet workbooks (applied per table)."""
@@ -474,7 +477,9 @@ class TestAutoFilter:
 
         wb = load_workbook(io.BytesIO(captured['data']))
         ws = wb["Data"]
-        assert ws.auto_filter.ref == "A1:C3"
+        assert len(ws.tables) == 1
+        table = list(ws.tables.values())[0]
+        assert table.ref == "A1:C3"
 
 
 class TestColumnAlignment:

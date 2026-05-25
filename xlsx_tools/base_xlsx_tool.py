@@ -107,6 +107,7 @@ def markdown_to_excel(markdown_content: str, file_name: str | None = None, auto_
                     event.table_data, ws, event.start_row, table_positions,
                     all_sheet_table_positions=all_sheet_table_positions,
                     auto_filter=auto_filter,
+                    table_index=tables_count,
                 )
 
                 tables_count += 1

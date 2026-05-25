@@ -6,6 +6,7 @@ from datetime import datetime
 from dateutil import parser as dateutil_parser
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +126,8 @@ def _parse_column_alignments(separator_line: str) -> list[str | None]:
 def parse_table(lines: list[str], start_idx: int) -> tuple[list[list[str]] | None, int]:
     """Parse markdown table and return (table_data, next_index).
 
-    Also extracts column alignments from the separator row and stores them
-    as a '_col_alignments' attribute on the returned list (duck-typed).
+    Also extracts column alignments from the separator row and attaches them
+    as the 'col_alignments' attribute on the returned TableData instance.
     """
     table_lines: list[str] = []
     i = start_idx
@@ -189,18 +190,6 @@ class CellResult:
         return {'bold': self.bold, 'italic': self.italic, 'monospace': self.monospace}
 
 
-def _detect_implicit_formula(value: str) -> str | None:
-    """Detect common formula patterns written without '=' prefix.
-
-    Returns the formula string (with '=' prepended) or None if not a formula pattern.
-    """
-    if re.match(r'^(SUM|sum)\([A-Z]+\d+:[A-Z]+\d+\)$', value):
-        return f"={value.upper()}"
-    if re.match(r'^(AVG|avg|AVERAGE|average)\([A-Z]+\d+:[A-Z]+\d+\)$', value):
-        return f"=AVERAGE({value.split('(')[1]}"
-    if re.match(r'^[A-Z]+\d+[+\-*/][A-Z]+\d+$', value):
-        return f"={value}"
-    return None
 
 
 def resolve_cell(raw_text: str) -> CellResult:
@@ -233,15 +222,7 @@ def resolve_cell(raw_text: str) -> CellResult:
             bold=bold, italic=italic, monospace=monospace,
         )
 
-    # Step 3: Detect implicit formula patterns (without = prefix)
-    implicit_formula = _detect_implicit_formula(clean_text)
-    if implicit_formula:
-        return CellResult(
-            value=implicit_formula, is_formula=True,
-            bold=bold, italic=italic, monospace=monospace,
-        )
-
-    # Step 4: Detect percent and convert to number
+    # Step 3: Detect percent and convert to number
     is_percent = clean_text.endswith('%')
     if is_percent:
         try:
@@ -513,6 +494,7 @@ def add_table_to_sheet(
     table_positions: dict[str, int] | None = None,
     all_sheet_table_positions: dict[str, dict[str, int]] | None = None,
     auto_filter: bool = False,
+    table_index: int = 0,
 ) -> int:
     """Add table data to Excel worksheet with proper formatting and formula support."""
     if not table_data:
@@ -599,12 +581,22 @@ def add_table_to_sheet(
         adjusted_width = min(max(max_length + COLUMN_WIDTH_PADDING, MIN_COLUMN_WIDTH), MAX_COLUMN_WIDTH)
         worksheet.column_dimensions[column_letter].width = adjusted_width
 
-    # Auto-filter: apply to the table range if requested
+    # Auto-filter: create a proper Excel Table object (supports multiple per sheet)
     if auto_filter:
         num_cols = len(table_data[0]) if table_data else 0
         if num_cols > 0:
             last_col_letter = get_column_letter(num_cols)
             last_data_row = start_row + len(table_data) - 1
-            worksheet.auto_filter.ref = f"A{start_row}:{last_col_letter}{last_data_row}"
+            table_ref = f"A{start_row}:{last_col_letter}{last_data_row}"
+            # Excel table names must be unique across the workbook
+            table_name = f"Table_{worksheet.title.replace(' ', '_')}_{table_index + 1}"
+            # Sanitize: Excel table names allow only letters, digits, underscores
+            table_name = re.sub(r'[^A-Za-z0-9_]', '', table_name)
+            excel_table = Table(displayName=table_name, ref=table_ref)
+            excel_table.tableStyleInfo = TableStyleInfo(
+                name="TableStyleMedium2", showFirstColumn=False,
+                showLastColumn=False, showRowStripes=True, showColumnStripes=False,
+            )
+            worksheet.add_table(excel_table)
 
     return start_row + len(table_data) + TABLE_BOTTOM_SPACING
