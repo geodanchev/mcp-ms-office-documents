@@ -145,8 +145,9 @@ def walk_markdown_lines(lines: list[str]) -> list[LineEvent]:
                 table_counter += 1
             pending_directives = {}
 
-        # Skip other content
+        # Skip other content — directives must be directly above a table
         else:
+            pending_directives = {}
             i += 1
 
     return events

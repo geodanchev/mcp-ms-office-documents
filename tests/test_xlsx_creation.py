@@ -481,6 +481,30 @@ class TestAutoFilter:
         table = list(ws.tables.values())[0]
         assert table.ref == "A1:C3"
 
+    def test_auto_filter_numeric_header_stays_string(self):
+        """Headers that look like numbers remain strings (Excel Table requires string headers)."""
+        markdown = """| 2024 | 2025 | Growth |
+|------|------|--------|
+| 100  | 150  | 50%    |
+"""
+        captured = {}
+
+        def fake_upload(file_obj, suffix, **kwargs):
+            captured['data'] = file_obj.read()
+            file_obj.seek(0)
+            return "https://fake-url/test.xlsx"
+
+        with patch("xlsx_tools.base_xlsx_tool.upload_file", side_effect=fake_upload):
+            markdown_to_excel(markdown, auto_filter=True)
+
+        wb = load_workbook(io.BytesIO(captured['data']))
+        ws = wb.active
+        # Headers must be strings, not numbers
+        assert ws.cell(row=1, column=1).value == "2024"
+        assert isinstance(ws.cell(row=1, column=1).value, str)
+        assert ws.cell(row=1, column=2).value == "2025"
+        assert isinstance(ws.cell(row=1, column=2).value, str)
+
 
 class TestColumnAlignment:
     """Tests for column alignment from separator row markers."""
@@ -947,6 +971,26 @@ class TestTypesDirectiveAdvanced:
         assert ws.cell(row=2, column=1).value == "ABC"
         assert ws.cell(row=2, column=2).value == 5000.0
 
+    def test_formatted_text_with_type_directive(self):
+        """Inline markdown formatting is stripped before type coercion and applied to cell."""
+        markdown = """<!-- types: number, currency:$ -->
+| Quantity | Price  |
+|----------|--------|
+| **123**  | *50.00* |
+| `456`    | 100    |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        # Bold 123 should be parsed as number with bold formatting
+        assert ws.cell(row=2, column=1).value == 123.0
+        assert ws.cell(row=2, column=1).font.bold is True
+        # Italic 50.00 should be parsed as currency with italic formatting
+        assert ws.cell(row=2, column=2).value == 50.0
+        assert ws.cell(row=2, column=2).font.italic is True
+        # Monospace 456 should be parsed as number with Courier New
+        assert ws.cell(row=3, column=1).value == 456.0
+        assert ws.cell(row=3, column=1).font.name == 'Courier New'
+
     def test_directives_dont_carry_across_tables(self):
         """Directives only apply to the immediately following table."""
         markdown = """<!-- types: text -->
@@ -971,6 +1015,26 @@ class TestTypesDirectiveAdvanced:
                 if val == 1234.0:
                     found_number = True
         assert found_number, "Second table should auto-detect 1234 as a number"
+
+    def test_directives_dont_carry_across_prose(self):
+        """Directives are cleared if non-table content appears between directive and table."""
+        markdown = """<!-- types: text -->
+
+Some prose paragraph here.
+
+| Amount |
+|--------|
+| 1234   |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        # The directive should NOT apply because prose intervened
+        found_number = False
+        for row in ws.iter_rows(values_only=True):
+            for val in row:
+                if val == 1234.0:
+                    found_number = True
+        assert found_number, "Directive should not apply when prose separates it from the table"
 
     def test_directives_dont_carry_across_sheets(self):
         """Directives are reset when a new sheet is started."""
@@ -1021,6 +1085,18 @@ class TestTypesDirectiveAdvanced:
         wb = _create_workbook_from_markdown(markdown)
         ws = wb.active
         assert ws.cell(row=2, column=1).value == "N/A"
+
+    def test_currency_empty_symbol_defaults_to_dollar(self):
+        """Currency directive with no symbol (currency:) defaults to $ without raising."""
+        markdown = """<!-- types: currency: -->
+| Price   |
+|---------|
+| 1234.56 |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        assert ws.cell(row=2, column=1).value == pytest.approx(1234.56)
+        assert '$' in ws.cell(row=2, column=1).number_format
 
 
 class TestDirectiveParserUnit:

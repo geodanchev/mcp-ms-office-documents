@@ -192,6 +192,28 @@ class CellResult:
 
 
 
+def _strip_markdown_formatting(raw_text: str) -> tuple[str, dict[str, bool]]:
+    """Strip inline markdown formatting markers from a cell value.
+
+    Returns (clean_text, formatting_dict) where formatting_dict has
+    'bold', 'italic', 'monospace' keys.
+    """
+    clean_text = raw_text.strip()
+    formatting = {'bold': False, 'italic': False, 'monospace': False}
+
+    if clean_text.startswith('**') and clean_text.endswith('**') and len(clean_text) > 4:
+        clean_text = clean_text[2:-2]
+        formatting['bold'] = True
+    elif clean_text.startswith('*') and clean_text.endswith('*') and len(clean_text) > 2:
+        clean_text = clean_text[1:-1]
+        formatting['italic'] = True
+    elif clean_text.startswith('`') and clean_text.endswith('`') and len(clean_text) > 2:
+        clean_text = clean_text[1:-1]
+        formatting['monospace'] = True
+
+    return clean_text, formatting
+
+
 def resolve_cell(raw_text: str) -> CellResult:
     """Parse a raw markdown cell string into a fully resolved CellResult.
 
@@ -200,20 +222,10 @@ def resolve_cell(raw_text: str) -> CellResult:
     of parse_cell_formatting → detect_formula_pattern → format_cell_value.
     """
     # Step 1: Strip markdown formatting markers
-    clean_text = raw_text.strip()
-    bold = False
-    italic = False
-    monospace = False
-
-    if clean_text.startswith('**') and clean_text.endswith('**') and len(clean_text) > 4:
-        clean_text = clean_text[2:-2]
-        bold = True
-    elif clean_text.startswith('*') and clean_text.endswith('*') and len(clean_text) > 2:
-        clean_text = clean_text[1:-1]
-        italic = True
-    elif clean_text.startswith('`') and clean_text.endswith('`') and len(clean_text) > 2:
-        clean_text = clean_text[1:-1]
-        monospace = True
+    clean_text, formatting = _strip_markdown_formatting(raw_text)
+    bold = formatting['bold']
+    italic = formatting['italic']
+    monospace = formatting['monospace']
 
     # Step 2: Check if it's an explicit formula (= prefix)
     if clean_text.startswith('='):
@@ -543,6 +555,8 @@ def _apply_column_type(cell, raw_text: str, type_spec: str | None) -> bool:
     # currency:<symbol> — strip symbol and thousands separators, store as number
     if type_lower.startswith('currency'):
         symbol = type_spec.split(':', 1)[1].strip() if ':' in type_spec else '$'
+        if not symbol:
+            symbol = '$'  # Default if directive is 'currency:' with no symbol
         # Strip the currency symbol and common thousand separators
         numeric_str = clean.replace(symbol, '').replace(' ', '').strip()
         # Handle both comma-as-thousands (1,234.56) and dot-as-thousands (1.234,56)
@@ -650,19 +664,23 @@ def add_table_to_sheet(
 
                 # If column type directive applies (data rows only), use it
                 col_type = col_types[col_idx] if col_idx < len(col_types) else None
-                if row_idx > 0 and col_type and _apply_column_type(cell, cell_text, col_type):
-                    # Type directive handled the cell value — just apply border/alignment
-                    cell.border = border
-                    explicit_align = col_alignments[col_idx] if col_idx < len(col_alignments) else None
-                    if explicit_align:
-                        cell.alignment = Alignment(horizontal=explicit_align)
-                    elif isinstance(cell.value, bool):
-                        cell.alignment = Alignment(horizontal='center')
-                    elif isinstance(cell.value, (int, float, datetime)):
-                        cell.alignment = Alignment(horizontal='right')
-                    else:
-                        cell.alignment = Alignment(horizontal='left')
-                    continue
+                if row_idx > 0 and col_type:
+                    # Strip markdown formatting before type coercion
+                    clean_text, fmt_info = _strip_markdown_formatting(cell_text)
+                    if _apply_column_type(cell, clean_text, col_type):
+                        # Type directive handled the cell value — apply formatting, border, alignment
+                        apply_cell_formatting(cell, fmt_info)
+                        cell.border = border
+                        explicit_align = col_alignments[col_idx] if col_idx < len(col_alignments) else None
+                        if explicit_align:
+                            cell.alignment = Alignment(horizontal=explicit_align)
+                        elif isinstance(cell.value, bool):
+                            cell.alignment = Alignment(horizontal='center')
+                        elif isinstance(cell.value, (int, float, datetime)):
+                            cell.alignment = Alignment(horizontal='right')
+                        else:
+                            cell.alignment = Alignment(horizontal='left')
+                        continue
 
                 resolved = resolve_cell(cell_text)
 
@@ -673,7 +691,16 @@ def add_table_to_sheet(
                     cell.value = adjusted_formula
                     cell.fill = formula_fill
                 else:
-                    cell.value = resolved.value
+                    # Header row must remain as strings — Excel Tables require
+                    # string headers; numeric-looking headers (e.g. "2024") must
+                    # not be converted to numbers.
+                    if row_idx == 0:
+                        # Use the original stripped text for headers to avoid
+                        # artifacts like "2024.0" from float conversion
+                        clean_header, _ = _strip_markdown_formatting(cell_text)
+                        cell.value = clean_header
+                    else:
+                        cell.value = resolved.value
 
                 # Apply inline formatting (bold/italic/monospace) — skip for header row
                 # since header styling will override it immediately below
