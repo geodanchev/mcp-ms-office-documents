@@ -45,38 +45,49 @@
 # MARKDOWN FORMATTING SUPPORT
 # =============================================================================
 #
-# Inline formatting (works within any text):
-#   **bold text**     -> Bold text
-#   *italic text*     -> Italic text
-#   `code`            -> Monospace font (Courier New)
-#   [link text](url)  -> Clickable hyperlink
+# Inline formatting (works within any text — paragraphs, headings, lists, cells):
+#   **bold**            -> Bold            *italic*        -> Italic
+#   ***bold italic***   -> Bold + italic   ~~strike~~      -> Strikethrough
+#   __underline__       -> Underline       ==highlight==   -> Yellow highlight
+#   `code`              -> Monospace (Courier New)
+#   ^super^ (x^2^)      -> Superscript     ~sub~ (H~2~O)   -> Subscript
+#   [link text](url)    -> Clickable hyperlink
+#   \* \** \`           -> Escaped literals (render the marker as text)
+#   Nesting works, e.g. **bold with *italic* inside**.
 #
-# Block-level markdown (creates new paragraphs):
+# Block-level markdown (separate every block with a blank line):
 #   Headings:
-#     # Heading 1
-#     ## Heading 2
-#     ### Heading 3 (up to ###### Heading 6)
+#     # Heading 1  ...  up to  ###### Heading 6
 #
-#   Numbered lists:
+#   Numbered lists (numbering restarts automatically when a list begins at 1.):
 #     1. First item
 #     2. Second item
 #
-#   Bullet points:
+#   Bullet points (- , * or + ; nest with 3-space indent):
 #     - Item one
-#     - Item two
-#     * Also works with asterisk
-#     + Or plus sign
-#
-#   Nested lists (use 3 spaces for indentation):
-#     - Main item
 #        - Sub item
-#        - Another sub item
 #
-#   Tables (markdown table syntax):
+#   Block quotes:
+#     > Quoted text (uses the "Quote" style)
+#
+#   Tables (Word "Table Grid" style; cells accept inline formatting):
 #     | Column 1 | Column 2 |
 #     |----------|----------|
 #     | Value 1  | Value 2  |
-#   Tables are converted to Word tables with "Table Grid" style.
+#     Alignment:      |:---|:---:|---:|   -> left / center / right
+#     Borderless:     put <!-- borderless --> on the line above the table
+#     Column widths:  put <!-- widths: 30 70 --> on the line above the table
+#     Cell newline:   use <br> inside a cell for a new paragraph
+#
+#   Images:           ![alt text](url)
+#   Page break:       --- (three+ dashes alone on a line — starts a new page)
+#   Horizontal line:  *** (three+ asterisks alone on a line)
+#   Text alignment:   <center>text</center>  or  <div align="right|center|justify|left">text</div>
+#   Soft line break:  end a line with two trailing spaces
+#
+# Note: in dynamic templates, block content (lists, headings, tables) is rendered
+# for body placeholders; placeholders inside table cells, headers and footers
+# receive inline formatting only.
 #
 # =============================================================================
 # CUSTOM STYLE MAPPING (optional)

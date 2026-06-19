@@ -174,7 +174,7 @@ async def create_excel_document(
 
 @mcp.tool(
     name="create_word_from_markdown",
-    description="Converts markdown content to a professionally formatted Word (.docx) document. Supports headings, lists, tables, images, block quotes, page breaks, horizontal lines, text alignment, and rich inline formatting.",
+    description="Converts markdown content to a professionally formatted Word (.docx) document. Supports headings, lists, tables, images, block quotes, page breaks, horizontal lines, text alignment, custom per-block styles, and rich inline formatting.",
     tags={"word", "document", "text", "legal", "contract"},
     annotations={"title": "Markdown to Word Converter"}
 )
@@ -185,7 +185,7 @@ async def create_word_document(
         "BLOCK ELEMENTS (each on its own line):\n"
         "- Headings: # H1, ## H2, ### H3, #### H4, ##### H5, ###### H6\n"
         "- Unordered lists: - item (or * or +); nest with 3-space indent\n"
-        "- Ordered lists: 1. item, 2. item; nest with 3-space indent\n"
+        "- Ordered lists: 1. item, 2. item; nest with 3-space indent. Numbering restarts automatically whenever a list begins again at 1.\n"
         "- Tables: | H1 | H2 |\\n|---|---|\\n| C1 | C2 | (cells support inline formatting and <br> for new paragraph; use :---|:---:|---: in separator for left/center/right alignment)\n"
         "- Borderless table: add <!-- borderless --> on the line before the table (useful for bilingual/parallel layouts)\n"
         "- Column widths: add <!-- widths: 30 70 --> before the table (proportional values, any number of columns)\n"
@@ -193,6 +193,7 @@ async def create_word_document(
         "- Page break: --- (three+ dashes alone on a line — starts new page)\n"
         "- Horizontal line: *** (three+ asterisks alone on a line — visual separator)\n"
         "- Images: ![alt text](url)\n"
+        "- Custom style: put <!-- style: Style Name --> on the line directly before a block to render it with that Word style (applies to the next block only — every item of a list, or the table). Unknown styles fall back to the default.\n"
         "\n"
         "INLINE FORMATTING (usable in paragraphs, headings, lists, tables, quotes):\n"
         "- **bold**, *italic*, ***bold italic***\n"
