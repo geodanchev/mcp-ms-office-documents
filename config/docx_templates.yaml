@@ -23,11 +23,11 @@
 #
 # List styles (used for markdown lists):
 #   - List Bullet      (- item, * item, + item) - top level
-#   - List Bullet 2    (nested bullet, 3 spaces indent)
-#   - List Bullet 3    (deeply nested bullet, 6 spaces indent)
+#   - List Bullet 2    (nested bullet — indent child items one level)
+#   - List Bullet 3    (deeply nested bullet — indent two levels)
 #   - List Number      (1. item) - top level
-#   - List Number 2    (nested numbered, 3 spaces indent)
-#   - List Number 3    (deeply nested numbered, 6 spaces indent)
+#   - List Number 2    (nested numbered — indent child items one level)
+#   - List Number 3    (deeply nested numbered — indent two levels)
 #
 # Other styles:
 #   - Quote            (> blockquote text) - only in base tool
@@ -45,38 +45,100 @@
 # MARKDOWN FORMATTING SUPPORT
 # =============================================================================
 #
-# Inline formatting (works within any text):
-#   **bold text**     -> Bold text
-#   *italic text*     -> Italic text
-#   `code`            -> Monospace font (Courier New)
-#   [link text](url)  -> Clickable hyperlink
+# Inline formatting (works within any text — paragraphs, headings, lists, cells):
+#   **bold**            -> Bold            *italic*        -> Italic
+#   ***bold italic***   -> Bold + italic   ~~strike~~      -> Strikethrough
+#   __underline__       -> Underline       ==highlight==   -> Yellow highlight
+#   `code`              -> Monospace (Courier New)
+#   ^super^ (x^2^)      -> Superscript     ~sub~ (H~2~O)   -> Subscript
+#   [link text](url)    -> Clickable hyperlink
+#   \* \** \`           -> Escaped literals (render the marker as text)
+#   Nesting works, e.g. **bold with *italic* inside**.
 #
-# Block-level markdown (creates new paragraphs):
+# Block-level markdown (separate every block with a blank line):
 #   Headings:
-#     # Heading 1
-#     ## Heading 2
-#     ### Heading 3 (up to ###### Heading 6)
+#     # Heading 1  ...  up to  ###### Heading 6
 #
-#   Numbered lists:
+#   Numbered lists (numbering restarts automatically when a list begins at 1.):
 #     1. First item
 #     2. Second item
 #
-#   Bullet points:
+#   Bullet points (- , * or + ; nest by indenting child items — any
+#   consistent unit works: 2, 3 or 4 spaces, or a tab):
 #     - Item one
-#     - Item two
-#     * Also works with asterisk
-#     + Or plus sign
+#       - Sub item
 #
-#   Nested lists (use 3 spaces for indentation):
-#     - Main item
-#        - Sub item
-#        - Another sub item
+#   Block quotes:
+#     > Quoted text (uses the "Quote" style)
 #
-#   Tables (markdown table syntax):
+#   Fenced code blocks (rendered verbatim in a monospace font, not parsed):
+#     ```
+#     code stays exactly as written
+#     ```
+#
+#   Tables (Word "Table Grid" style; cells accept inline formatting):
 #     | Column 1 | Column 2 |
 #     |----------|----------|
 #     | Value 1  | Value 2  |
-#   Tables are converted to Word tables with "Table Grid" style.
+#     Alignment:      |:---|:---:|---:|   -> left / center / right
+#     Borderless:     put <!-- borderless --> on the line above the table
+#     Column widths:  put <!-- widths: 30 70 --> on the line above the table
+#     Cell newline:   use <br> inside a cell for a new paragraph
+#
+#   Images:           ![alt text](url)
+#   Page break:       --- (three+ dashes alone on a line — starts a new page)
+#   Horizontal line:  *** (three+ asterisks alone on a line)
+#   Text alignment:   <center>text</center>  or  <div align="right|center|justify|left">text</div>
+#   Soft line break:  end a line with two trailing spaces
+#
+# Note: in dynamic templates, block content (lists, headings, tables) is rendered
+# for body placeholders; placeholders inside table cells, headers and footers
+# receive inline formatting only.
+#
+# =============================================================================
+# CUSTOM STYLE MAPPING (optional)
+# =============================================================================
+# By default the renderer applies the built-in Word style names listed above.
+# If your template defines styles under different names, map them here so the
+# rendered markdown picks them up — no need to rename styles in Word.
+#
+# A top-level `style_mapping:` (below) applies to every template. Each template
+# may also declare its own `style_mapping:` which overrides the global one for
+# that template only. Unknown style names fall back to the document default
+# (with a logged warning) rather than failing the document.
+#
+# Recognised keys (any subset):
+#   heading_1 … heading_6        replace Heading 1 … Heading 6
+#   list_number / _2 / _3        replace List Number / List Number 2 / 3
+#   list_bullet / _2 / _3        replace List Bullet / List Bullet 2 / 3
+#   quote                        replace Quote
+#   table                        replace Table Grid
+#   normal                       replace Normal
+#   code                         paragraph style for fenced code blocks (``` ... ```)
+#
+# Example (uncomment and adjust to your template's style names):
+# style_mapping:
+#   heading_1: "Brand Title"
+#   list_number: "Brand Numbers"
+#   quote: "Brand Quote"
+#   table: "Brand Table"
+#
+# ---------------------------------------------------------------------------
+# Ad-hoc style tag (inside markdown content)
+# ---------------------------------------------------------------------------
+# To apply any style by name to a single block — without adding it to the
+# mapping above — put a style directive on its own line directly before the
+# block. It applies to the next block only (every item of a list; the table):
+#
+#   <!-- style: Callout -->
+#   This paragraph uses the "Callout" style.
+#
+#   <!-- style: Highlights -->
+#   - first bullet
+#   - second bullet
+#
+# An unknown style name falls back to the document default (with a warning)
+# rather than failing the document.
 
 
 templates:
@@ -90,6 +152,10 @@ templates:
     docx_path: letter_template.docx  # Must be in custom_templates/ directory
     annotations:
       title: Formal Letter Generator
+    # Optional per-template style overrides (win over the global style_mapping):
+    # style_mapping:
+    #   list_number: "Letter Numbers"
+    #   quote: "Letter Quote"
     args:
       - name: recipient_name
         type: string

@@ -13,19 +13,31 @@ import re
 ORDERED_LIST_PATTERN = re.compile(r'^\d+\.\s+')
 UNORDERED_LIST_PATTERN = re.compile(r'^[-*+]\s+')
 # Capture variants used by process_list_items() to extract the item text.
-ORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^\d+\.\s+(.+)')
-UNORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^[-*+]\s+(.+)')
+# The ordered pattern captures the explicit number (group 1) so the renderer can
+# restart numbering when "1." reappears at a level; group 2 is the item text.
+# Item text is (.*) — matching the detection patterns above — so a marker with no
+# text (e.g. "1." or "-") still captures (as empty) rather than failing the match.
+ORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^(\d+)\.\s+(.*)')
+UNORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^[-*+]\s+(.*)')
+# Comment directive: <!-- key --> or <!-- key: value --> placed on its own line
+# directly above the block it modifies. One mechanism for all block directives
+# (borderless, widths, style, …). Group 1 = key, group 2 = optional value.
+COMMENT_DIRECTIVE_PATTERN = re.compile(r'^<!--\s*([\w-]+)(?:\s*:\s*(.*?))?\s*-->$',
+                                       re.IGNORECASE)
 HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$')
 PAGE_BREAK_PATTERN = re.compile(r'^-{3,}\s*$')
 HORIZONTAL_LINE_PATTERN = re.compile(r'^\*{3,}\s*$')
 IMAGE_PATTERN = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
 TABLE_LINE_PATTERN = re.compile(r'^\|.+\|$')
+# Fenced code block opener: 3+ backticks or tildes, optional info/language string.
+# Group 1 is the fence run (its char/length identify the matching close).
+CODE_FENCE_PATTERN = re.compile(r'^(`{3,}|~{3,})(.*)$')
 
 # All block-level patterns checked by contains_block_markdown
 _BLOCK_PATTERNS = [
     ORDERED_LIST_PATTERN, UNORDERED_LIST_PATTERN, HEADING_PATTERN,
     PAGE_BREAK_PATTERN, HORIZONTAL_LINE_PATTERN, IMAGE_PATTERN,
-    TABLE_LINE_PATTERN,
+    TABLE_LINE_PATTERN, CODE_FENCE_PATTERN,
 ]
 
 # ---------------------------------------------------------------------------
@@ -34,7 +46,7 @@ _BLOCK_PATTERNS = [
 
 _INLINE_FORMAT_RE = re.compile(
     r'(\*{3}(?:[^*]|\*(?!\*{2}))+\*{3}'  # ***bold italic***
-    r'|\*\*(?:[^*]|\*(?!\*))+\*\*'       # **bold**
+    r'|\*\*(?:[^*]|\*[^*]+\*|\*(?!\*))+\*\*'  # **bold** (allows nested *italic*, incl. at the ***close)
     r'|~~.+?~~'                           # ~~strikethrough~~
     r'|==.+?=='                           # ==highlight==
     r'|__(?!_).+?__'                      # __underline__
