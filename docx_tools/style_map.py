@@ -36,6 +36,10 @@ class StyleMap:
     quote: str = "Quote"
     table: str = "Table Grid"
     normal: str = "Normal"
+    # Paragraph style for fenced code blocks. Default None = no paragraph style
+    # (runs are still set to a monospace font); map it to a template style to
+    # add shading/spacing.
+    code: str = None
 
     def heading_style(self, level: int) -> str:
         """Style name for a 1-based heading *level* (clamped to 1..len)."""
@@ -49,7 +53,7 @@ DEFAULT_STYLE_MAP = StyleMap()
 _HEADING_KEYS = {f"heading_{i}": i - 1 for i in range(1, 7)}
 _LIST_NUMBER_KEYS = {"list_number": 0, "list_number_2": 1, "list_number_3": 2}
 _LIST_BULLET_KEYS = {"list_bullet": 0, "list_bullet_2": 1, "list_bullet_3": 2}
-_SCALAR_KEYS = ("quote", "table", "normal")
+_SCALAR_KEYS = ("quote", "table", "normal", "code")
 
 
 def _normalize(mapping: dict) -> dict:

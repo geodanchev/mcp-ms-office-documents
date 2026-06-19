@@ -11,7 +11,8 @@ from .patterns import (
     TABLE_LINE_PATTERN,
     ORDERED_LIST_PATTERN,
     UNORDERED_LIST_PATTERN,
-    STYLE_DIRECTIVE_PATTERN,
+    COMMENT_DIRECTIVE_PATTERN,
+    CODE_FENCE_PATTERN,
 )
 from .inline_formatting import parse_inline_formatting
 from .block_elements import (
@@ -80,15 +81,9 @@ def process_markdown_content(doc, content, return_elements=False,
             if first_line.startswith('#'):
                 stripped_hashes = first_line.lstrip('#')
                 level = len(first_line) - len(stripped_hashes)
-                heading = add_mapped_heading(doc, min(level, 6), style_map)
-                parse_inline_formatting(stripped_hashes.strip(), heading)
-                elem = heading._p
+                elem = _add_heading(doc, level, stripped_hashes.strip(), style_map)._p
             elif first_line.startswith('>'):
-                quote_text = full_text[1:].strip()
-                quote_para = doc.add_paragraph()
-                apply_style(quote_para, style_map.quote)
-                parse_inline_formatting(quote_text, quote_para)
-                elem = quote_para._p
+                elem = _add_quote(doc, full_text[1:].strip(), style_map)._p
             else:
                 para = doc.add_paragraph()
                 parse_inline_formatting(full_text, para)
@@ -104,9 +99,65 @@ def process_markdown_content(doc, content, return_elements=False,
         if return_elements:
             all_elements.extend(block_elems)
     return all_elements
+_CODE_FONT = 'Courier New'
+
+
+def _add_heading(doc, level, content, style_map):
+    """Create a heading paragraph (mapped style) and parse *content* into it.
+
+    Shared by the block dispatcher and the soft-break path so heading rendering
+    lives in one place.
+    """
+    heading = add_mapped_heading(doc, min(level, 6), style_map)
+    parse_inline_formatting(content, heading)
+    return heading
+
+
+def _add_quote(doc, content, style_map):
+    """Create a block-quote paragraph (mapped style) and parse *content* into it."""
+    para = doc.add_paragraph()
+    apply_style(para, style_map.quote)
+    parse_inline_formatting(content, para)
+    return para
+
+
+def _render_code_block(doc, lines, start_idx, fence_match, style_map, collect):
+    """Render a fenced code block verbatim as monospace paragraphs.
+
+    *fence_match* is the opener match. Consumes lines up to and including the
+    closing fence (a line of the same fence character, at least as long, with no
+    info string). Each code line becomes one paragraph so blank lines and
+    indentation are preserved; markdown inside is intentionally NOT parsed.
+    Returns the index of the first line after the block.
+    """
+    fence = fence_match.group(1)
+    fence_char = fence[0]
+    fence_len = len(fence)
+    n = len(lines)
+    j = start_idx + 1
+    while j < n:
+        closing = lines[j].strip()
+        if closing and set(closing) == {fence_char} and len(closing) >= fence_len:
+            j += 1  # consume the closing fence
+            break
+        para = doc.add_paragraph()
+        if style_map.code:
+            apply_style(para, style_map.code, fallback=None)
+        # add_run preserves leading/trailing whitespace via xml:space="preserve"
+        run = para.add_run(lines[j])
+        run.font.name = _CODE_FONT
+        collect(para._p)
+        j += 1
+    return j
+
+
 def process_markdown_block(doc, lines, start_idx, return_element=True,
-                           style_map=DEFAULT_STYLE_MAP):
+                           style_map=DEFAULT_STYLE_MAP, directives=None):
     """Process a single markdown block element and return created XML elements.
+
+    *directives* carries comment-directive options (`borderless`, `widths`, …)
+    collected from `<!-- … -->` lines immediately above this block; see the
+    directive branch below.
     Returns:
         Tuple of (next_index, list_of_elements).
     """
@@ -123,30 +174,30 @@ def process_markdown_block(doc, lines, start_idx, return_element=True,
         heading_match = HEADING_PATTERN.match(stripped)
         if heading_match:
             level = len(heading_match.group(1))
-            heading = add_mapped_heading(doc, min(level, 6), style_map)
-            parse_inline_formatting(heading_match.group(2), heading)
+            heading = _add_heading(doc, level, heading_match.group(2), style_map)
             _collect(heading._p)
             return start_idx + 1, elements
+        # Fenced code block (``` or ~~~) — content is taken verbatim, NOT parsed
+        # as markdown, so headings/lists/backticks inside code are preserved.
+        fence_match = CODE_FENCE_PATTERN.match(stripped)
+        if fence_match:
+            next_idx = _render_code_block(doc, lines, start_idx, fence_match,
+                                          style_map, _collect)
+            return next_idx, elements
         # Table (lines starting with |)
         if TABLE_LINE_PATTERN.match(stripped):
             table_data, col_alignments, next_idx = parse_table(lines, start_idx)
             if table_data:
-                # Check preceding lines for table directives
-                borderless = False
+                # Table options come from comment directives collected above the
+                # table (see the directive branch below).
+                d = directives or {}
+                borderless = 'borderless' in d
                 col_widths = None
-                for lookback in range(1, 3):  # check up to 2 lines back
-                    if start_idx - lookback < 0:
-                        break
-                    prev = lines[start_idx - lookback].strip().lower()
-                    if prev in ('<!-- borderless -->', '<!--borderless-->'):
-                        borderless = True
-                    elif prev.startswith('<!-- widths:') and prev.endswith('-->'):
-                        # Parse <!-- widths: 30 70 --> or <!-- widths: 20 50 30 -->
-                        inner = prev[len('<!-- widths:'):-len('-->')].strip()
-                        try:
-                            col_widths = [float(v) for v in inner.split()]
-                        except ValueError:
-                            col_widths = None
+                if 'widths' in d:
+                    try:
+                        col_widths = [float(v) for v in d['widths'].split()]
+                    except ValueError:
+                        col_widths = None
                 word_table = add_table_to_doc(table_data, doc,
                                              col_alignments=col_alignments,
                                              borderless=borderless,
@@ -206,40 +257,47 @@ def process_markdown_block(doc, lines, start_idx, return_element=True,
             )
         # Blockquote (> text)
         if stripped.startswith('>'):
-            quote_text = stripped[1:].strip()
-            quote_para = doc.add_paragraph()
-            apply_style(quote_para, style_map.quote)
-            parse_inline_formatting(quote_text, quote_para)
+            quote_para = _add_quote(doc, stripped[1:].strip(), style_map)
             _collect(quote_para._p)
             return start_idx + 1, elements
-        # Style directive: <!-- style: Name --> applies Name to the next block.
-        style_directive = STYLE_DIRECTIVE_PATTERN.match(stripped)
-        if style_directive:
-            style_name = style_directive.group(1).strip()
-            # Skip the directive line and any blank lines to reach the next block.
-            next_idx = start_idx + 1
-            while next_idx < len(lines) and not lines[next_idx].strip():
-                next_idx += 1
-            if next_idx >= len(lines):
-                return next_idx, elements  # nothing follows; directive is a no-op
+        # Comment directives: <!-- borderless -->, <!-- widths: … -->, <!-- style: … -->.
+        # Collect consecutive directive lines and attach them to the next block
+        # (single look-ahead mechanism for all block directives).
+        directive_match = COMMENT_DIRECTIVE_PATTERN.match(stripped)
+        if directive_match:
+            collected = dict(directives) if directives else {}
+            idx = start_idx
+            while idx < len(lines):
+                m = COMMENT_DIRECTIVE_PATTERN.match(lines[idx].strip())
+                if not m:
+                    break
+                collected[m.group(1).lower()] = (m.group(2) or '').strip()
+                idx += 1
+            # Skip blank lines between the directives and the block they modify.
+            while idx < len(lines) and not lines[idx].strip():
+                idx += 1
+            if idx >= len(lines):
+                return idx, elements  # directives with nothing to attach to → no-op
             body = doc._body._body
             # Snapshot existing children (holding the proxies alive so lxml keeps a
             # stable identity for them); new elements are inserted before the trailing
             # <w:sectPr>, so positional slicing would be unreliable.
             existing = None if return_element else list(body)
             new_idx, block_elems = process_markdown_block(
-                doc, lines, next_idx, return_element=return_element, style_map=style_map
+                doc, lines, idx, return_element=return_element, style_map=style_map,
+                directives=collected,
             )
-            if return_element:
-                produced = block_elems
-            else:
-                produced = [el for el in list(body) if el not in existing]
-            for el in produced:
-                apply_style_to_block_element(doc, el, style_name)
+            # The 'style' directive applies the named style to whatever was produced.
+            style_name = collected.get('style')
+            if style_name:
+                produced = (block_elems if return_element
+                            else [el for el in list(body) if el not in existing])
+                for el in produced:
+                    apply_style_to_block_element(doc, el, style_name)
             if return_element:
                 elements.extend(block_elems)
             return new_idx, elements
-        # HTML comment directives (e.g. <!-- borderless -->) — skip silently
+        # Other HTML comments (not a recognised directive) — skip silently.
         if stripped.startswith('<!--') and stripped.endswith('-->'):
             return start_idx + 1, elements
         # Regular paragraph

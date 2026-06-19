@@ -70,6 +70,11 @@
 #   Block quotes:
 #     > Quoted text (uses the "Quote" style)
 #
+#   Fenced code blocks (rendered verbatim in a monospace font, not parsed):
+#     ```
+#     code stays exactly as written
+#     ```
+#
 #   Tables (Word "Table Grid" style; cells accept inline formatting):
 #     | Column 1 | Column 2 |
 #     |----------|----------|
@@ -108,6 +113,7 @@
 #   quote                        replace Quote
 #   table                        replace Table Grid
 #   normal                       replace Normal
+#   code                         paragraph style for fenced code blocks (``` ... ```)
 #
 # Example (uncomment and adjust to your template's style names):
 # style_mapping:

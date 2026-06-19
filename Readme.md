@@ -240,10 +240,11 @@ Both the Word and Excel tools accept Markdown. These references cover **everythi
 | Syntax | Result |
 |--------|--------|
 | `# H1` … `###### H6` | Headings 1–6 |
-| `- item` / `* item` / `+ item` | Bullet list (nest with **3-space** indent → `List Bullet 2/3`) |
-| `1. item` / `2. item` | Numbered list (nest with 3-space indent). **Numbering restarts automatically** whenever a list begins again with `1.` |
+| `- item` / `* item` / `+ item` | Bullet list (nest by indenting children — 2-4 spaces or a tab → `List Bullet 2/3`) |
+| `1. item` / `2. item` | Numbered list (nest by indenting children). **Numbering restarts automatically** whenever a list begins again with `1.` |
 | `> quote` | Block quote (`Quote` style) |
 | `\| A \| B \|` + `\|---\|---\|` | Table (see table features below) |
+| ` ``` ` … ` ``` ` (or `~~~`) | Fenced code block — content is rendered verbatim in a monospace font and **not** parsed as markdown |
 | `![alt](url)` | Image |
 | `---` (3+ dashes) | **Page break** (starts a new page) |
 | `***` (3+ asterisks) | Horizontal line (visual separator) |
@@ -510,7 +511,7 @@ templates:
     args: [ ... ]
 ```
 
-**Recognized keys:** `heading_1`…`heading_6`, `list_number` / `_2` / `_3`, `list_bullet` / `_2` / `_3`, `quote`, `table`, `normal`.
+**Recognized keys:** `heading_1`…`heading_6`, `list_number` / `_2` / `_3`, `list_bullet` / `_2` / `_3`, `quote`, `table`, `normal`, `code` (style for fenced code blocks).
 
 **Ad-hoc style tag:** to apply any style to a single block without a mapping, put a directive directly above it:
 

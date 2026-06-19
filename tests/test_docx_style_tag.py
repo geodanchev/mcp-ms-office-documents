@@ -98,3 +98,27 @@ def test_directive_in_detached_mode():
     )
     styled = [Paragraph(e, doc._body) for e in elements if e.tag.endswith('}p')]
     assert styled and all(p.style.name == "Callout" for p in styled)
+
+
+def test_stacked_directives_compose_on_a_table():
+    """style + borderless + widths can all be stacked above one table (4.6)."""
+    doc = _doc(table_styles=("Fancy Grid",))
+    md = (
+        "<!-- style: Fancy Grid -->\n"
+        "<!-- borderless -->\n"
+        "<!-- widths: 30 70 -->\n"
+        "| A | B |\n|---|---|\n| 1 | 2 |\n"
+    )
+    process_markdown_content(doc, md)
+    table = doc.tables[-1]
+    assert table.style.name == "Fancy Grid"
+    # 30/70 split → second column noticeably wider than the first.
+    assert table.rows[0].cells[1].width > table.rows[0].cells[0].width
+
+
+def test_nondirective_comment_is_skipped_not_rendered():
+    doc = Document()
+    start = len(doc.paragraphs)
+    process_markdown_content(doc, "before\n\n<!-- just a free-text note -->\n\nafter\n")
+    texts = [p.text for p in doc.paragraphs[start:] if p.text]
+    assert texts == ["before", "after"]  # the comment is not rendered as a paragraph

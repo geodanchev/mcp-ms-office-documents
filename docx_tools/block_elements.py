@@ -164,13 +164,19 @@ def add_table_to_doc(table_data, doc, col_alignments=None, borderless=False,
 # Lists
 # ---------------------------------------------------------------------------
 def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
-                       return_elements=False, number_styles=None, bullet_styles=None):
+                       return_elements=False, number_styles=None, bullet_styles=None,
+                       base_indent=None):
     """Process markdown list items with proper Word numbering.
     When *return_elements* is True the created paragraph XML elements are
     removed from the document body and returned so the caller can re-insert
     them elsewhere (used by the template placeholder machinery).
     *number_styles*/*bullet_styles* override the per-level Word style names
     (see :class:`docx_tools.style_map.StyleMap`); they default to the built-ins.
+
+    Nesting is determined by *relative* indentation: items sharing the first
+    item's indent (*base_indent*) are siblings at *level*; a more-indented item
+    begins a child list one level deeper. This makes any consistent indent unit
+    work (2, 3 or 4 spaces, or a tab) rather than assuming a fixed step.
     Returns:
         Tuple of (next_line_index, list_of_elements | None).
     """
@@ -199,8 +205,11 @@ def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
         stripped_left = original_line.lstrip()
         indent = len(original_line) - len(stripped_left)
         line = stripped_left.rstrip()
-        current_level = indent // 3
-        if current_level != level:
+        if base_indent is None:
+            base_indent = indent  # first item defines this level's indent
+        # Items more/less indented than this level are handled by the caller
+        # (a child list via the look-ahead below, or an ancestor on dedent).
+        if indent != base_indent:
             break
         list_match = list_capture_pattern.match(line)
         if not list_match:
@@ -239,14 +248,14 @@ def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
                 i += 1
                 continue
             next_indent = len(next_original) - len(next_stripped_left)
-            next_level = next_indent // 3
-            if next_level > level:
+            if next_indent > base_indent:
                 is_nested_ordered = bool(ORDERED_LIST_PATTERN.match(next_line))
                 is_nested_unordered = bool(UNORDERED_LIST_PATTERN.match(next_line))
                 if is_nested_ordered or is_nested_unordered:
                     i, nested = process_list_items(
-                        lines, i, doc, is_nested_ordered, next_level, return_elements,
+                        lines, i, doc, is_nested_ordered, level + 1, return_elements,
                         number_styles=number_styles, bullet_styles=bullet_styles,
+                        base_indent=next_indent,
                     )
                     if return_elements and nested:
                         elements.extend(nested)

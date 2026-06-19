@@ -17,20 +17,25 @@ UNORDERED_LIST_PATTERN = re.compile(r'^[-*+]\s+')
 # restart numbering when "1." reappears at a level; group 2 is the item text.
 ORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^(\d+)\.\s+(.+)')
 UNORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^[-*+]\s+(.+)')
-# Ad-hoc style directive: <!-- style: My Style --> applies the named style to the
-# next block (issue #66, part B). Group 1 is the style name.
-STYLE_DIRECTIVE_PATTERN = re.compile(r'^<!--\s*style:\s*(.+?)\s*-->$', re.IGNORECASE)
+# Comment directive: <!-- key --> or <!-- key: value --> placed on its own line
+# directly above the block it modifies. One mechanism for all block directives
+# (borderless, widths, style, …). Group 1 = key, group 2 = optional value.
+COMMENT_DIRECTIVE_PATTERN = re.compile(r'^<!--\s*([\w-]+)(?:\s*:\s*(.*?))?\s*-->$',
+                                       re.IGNORECASE)
 HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$')
 PAGE_BREAK_PATTERN = re.compile(r'^-{3,}\s*$')
 HORIZONTAL_LINE_PATTERN = re.compile(r'^\*{3,}\s*$')
 IMAGE_PATTERN = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
 TABLE_LINE_PATTERN = re.compile(r'^\|.+\|$')
+# Fenced code block opener: 3+ backticks or tildes, optional info/language string.
+# Group 1 is the fence run (its char/length identify the matching close).
+CODE_FENCE_PATTERN = re.compile(r'^(`{3,}|~{3,})(.*)$')
 
 # All block-level patterns checked by contains_block_markdown
 _BLOCK_PATTERNS = [
     ORDERED_LIST_PATTERN, UNORDERED_LIST_PATTERN, HEADING_PATTERN,
     PAGE_BREAK_PATTERN, HORIZONTAL_LINE_PATTERN, IMAGE_PATTERN,
-    TABLE_LINE_PATTERN,
+    TABLE_LINE_PATTERN, CODE_FENCE_PATTERN,
 ]
 
 # ---------------------------------------------------------------------------
