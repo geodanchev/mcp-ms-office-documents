@@ -119,8 +119,9 @@ def apply_style(obj, style_name, fallback="Normal") -> None:
         obj.style = style_name
         return
     except KeyError:
-        logger.warning("Style %r not found in document; falling back to %r.",
-                       style_name, fallback)
+        fallback_desc = repr(fallback) if fallback else "the document default"
+        logger.warning("Style %r not found in document; falling back to %s.",
+                       style_name, fallback_desc)
     if fallback and fallback != style_name:
         try:
             obj.style = fallback

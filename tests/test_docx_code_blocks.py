@@ -108,6 +108,16 @@ def test_default_code_block_uses_courier_new():
     assert all(r.font.name == "Courier New" for r in p.runs)
 
 
+def test_missing_mapped_code_style_falls_back_to_monospace():
+    """If the mapped code style is absent from the template, stay monospace."""
+    doc = _new()  # "Code Block" style intentionally NOT registered
+    start = len(doc.paragraphs)
+    process_markdown_content(doc, "```\nz = 3\n```\n", style_map=build_style_map({"code": "Code Block"}))
+    p = [p for p in _lines(doc, start) if p.text == "z = 3"][0]
+    assert p.style.name != "Code Block"          # style was missing
+    assert all(r.font.name == "Courier New" for r in p.runs)  # but still monospace
+
+
 def test_code_fence_detected_as_block_markdown():
     # Ensures dynamic-template placeholder values with code render as block content.
     assert contains_block_markdown("```\ncode\n```")
