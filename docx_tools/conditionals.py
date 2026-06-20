@@ -113,7 +113,9 @@ def resolve_conditionals(doc: "DocxDocument", conditions: dict[str, Any]) -> Non
         doc: The Word document to process (mutated in place).
         conditions: Mapping of argument name -> value; truthiness decides keeps.
     """
-    _resolve_block_container(doc._body._body, conditions)
+    # ``doc.element`` is the public CT_Document; ``.body`` is its CT_Body, whose
+    # direct children are the body block elements (<w:p>, <w:tbl>, <w:sectPr>).
+    _resolve_block_container(doc.element.body, conditions)
 
 
 def _resolve_block_container(container, conditions: dict[str, Any]) -> None:

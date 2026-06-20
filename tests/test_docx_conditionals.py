@@ -17,6 +17,7 @@ import pytest
 from docx import Document
 
 from docx_tools.conditionals import resolve_conditionals
+from docx_tools.dynamic_docx_tools import _replace_placeholders_in_document
 
 OUTPUT_DIR = Path(__file__).parent / "output" / "docx"
 
@@ -229,6 +230,39 @@ def test_document_without_markers_unchanged():
     doc = build_doc(["One", "Two", "Three"])
     resolve_conditionals(doc, {"flag": True})
     assert body_texts(doc) == ["One", "Two", "Three"]
+
+
+# ---------------------------------------------------------------------------
+# Integration: conditional resolution + placeholder substitution (the order
+# wired in dynamic_docx_tools._sync_impl)
+# ---------------------------------------------------------------------------
+
+def _render(doc, payload):
+    """Mirror the _sync_impl pipeline: prune conditionals, then substitute."""
+    resolve_conditionals(doc, payload)
+    context = {k: ("" if v is None else str(v)) for k, v in payload.items()}
+    _replace_placeholders_in_document(doc, context)
+
+
+def test_pipeline_fills_placeholders_in_kept_block_only():
+    doc = build_doc(
+        [
+            "{{#if greet}}",
+            "Hello {{name}}!",
+            "{{/if}}",
+            "{{#if secret}}",
+            "Secret for {{name}}",
+            "{{/if}}",
+            "Signed: {{name}}",
+        ]
+    )
+    _render(doc, {"greet": True, "secret": False, "name": "Dan"})
+
+    texts = body_texts(doc)
+    assert "Hello Dan!" in texts          # kept block, placeholder filled
+    assert "Signed: Dan" in texts         # outside any block, placeholder filled
+    assert all("Secret" not in t for t in texts)   # dropped block, gone entirely
+    assert all("{{" not in t for t in texts)       # no leftover markers/placeholders
 
 
 # ---------------------------------------------------------------------------
