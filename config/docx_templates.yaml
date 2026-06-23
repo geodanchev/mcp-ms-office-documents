@@ -296,7 +296,7 @@ templates:
       - name: prilohy
         type: string
         required: false
-        default: " "
+        default: " "   # a space keeps the placeholder from rendering as-is when omitted
         description: |
           Attachment list; if none, send a single space. Bold heading, each
           attachment on its own line via <br>. Example:

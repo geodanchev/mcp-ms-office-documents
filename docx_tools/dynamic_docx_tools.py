@@ -157,16 +157,18 @@ def _propagate_format_to_block(doc, inserted, src_ppr, fmt) -> None:
     so e.g. a justified letter body stays justified instead of falling back to the
     document default.
     """
-    # Layout-only copy of the placeholder's paragraph properties: drop its
-    # <w:pStyle> so the placeholder's NAMED style (e.g. when the placeholder
-    # happens to sit in a Heading paragraph) is never stamped onto produced prose;
-    # produced prose keeps its own default style and only inherits direct layout.
+    # Layout-only copy of the placeholder's paragraph properties: drop its named
+    # style (<w:pStyle>) and list numbering (<w:numPr>) so neither is stamped onto
+    # produced prose (e.g. a placeholder that sits in a Heading or a list item).
+    # Produced prose keeps its own default style and inherits only direct layout
+    # (alignment/indent/spacing).
     layout_ppr = None
     if src_ppr is not None:
         layout_ppr = copy.deepcopy(src_ppr)
-        src_pstyle = layout_ppr.find(qn('w:pStyle'))
-        if src_pstyle is not None:
-            layout_ppr.remove(src_pstyle)
+        for tag in ('w:pStyle', 'w:numPr'):
+            child = layout_ppr.find(qn(tag))
+            if child is not None:
+                layout_ppr.remove(child)
     for elem in inserted:
         if elem.tag != qn('w:p'):
             continue  # tables etc. are not styled here

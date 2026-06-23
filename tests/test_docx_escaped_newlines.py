@@ -18,6 +18,8 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -80,6 +82,9 @@ def test_literal_newline_does_not_become_stray_n():
 
 
 def test_literal_newline_renders_as_break():
+    # python-docx (1.x) turns a "\n" inside run.text into a <w:br> element and
+    # reflects it back as "\n" in Paragraph.text, so a bare newline reliably
+    # becomes a soft break on the inline path. (Both assertions hold together.)
     para = _render_inline(r"Line one\nLine two")
     assert _break_count(para) == 1
     assert para.text == "Line one\nLine two"
@@ -268,3 +273,23 @@ def test_template_named_style_not_stamped_on_prose():
     bodies = [p for p in doc.paragraphs if p.text.strip()]
     assert [p.text for p in bodies] == ["Plain one.", "Plain two."]
     assert all(p.style.name == "Normal" for p in bodies)
+
+
+def test_template_list_numbering_not_stamped_on_prose():
+    # When the placeholder paragraph carries DIRECT list numbering (<w:numPr>),
+    # produced prose paragraphs must not inherit it (they would render as a list).
+    doc = Document()
+    para = doc.add_paragraph()
+    para.add_run("{{x}}")
+    pPr = para._p.get_or_add_pPr()
+    numPr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl"); ilvl.set(qn("w:val"), "0"); numPr.append(ilvl)
+    numId = OxmlElement("w:numId"); numId.set(qn("w:val"), "1"); numPr.append(numId)
+    pPr.append(numPr)
+
+    _replace_placeholders_in_document(doc, {"x": "Plain one.\n\nPlain two."})
+    bodies = [p for p in doc.paragraphs if p.text.strip()]
+    assert [p.text for p in bodies] == ["Plain one.", "Plain two."]
+    for p in bodies:
+        ppr = p._p.find(qn("w:pPr"))
+        assert ppr is None or ppr.find(qn("w:numPr")) is None
