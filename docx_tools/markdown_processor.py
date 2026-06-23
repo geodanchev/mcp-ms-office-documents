@@ -14,6 +14,7 @@ from .patterns import (
     COMMENT_DIRECTIVE_PATTERN,
     CODE_FENCE_PATTERN,
     ordered_list_is_genuine,
+    normalize_escaped_newlines,
 )
 from .inline_formatting import parse_inline_formatting
 from .block_elements import (
@@ -46,6 +47,10 @@ def process_markdown_content(doc, content, return_elements=False,
     Returns:
         List of XML elements if return_elements is True, otherwise an empty list.
     """
+    # Treat literal "\n"/"\r\n" sequences (typed as text rather than real
+    # newlines) as genuine newlines so they split into paragraphs/blocks instead
+    # of being mangled into stray "n" characters downstream.
+    content = normalize_escaped_newlines(content)
     lines = content.split('\n')
     n = len(lines)
     i = 0
