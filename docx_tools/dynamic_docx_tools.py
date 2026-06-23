@@ -48,7 +48,7 @@ from template_utils import find_file_in_template_dirs
 from async_runner import run_blocking
 from .conditionals import resolve_conditionals
 from .inline_formatting import parse_inline_formatting
-from .patterns import contains_block_markdown
+from .patterns import contains_block_markdown, normalize_escaped_newlines
 from .markdown_processor import process_markdown_content
 from .style_map import DEFAULT_STYLE_MAP, build_style_map
 from fastmcp.exceptions import ToolError
@@ -77,7 +77,7 @@ def _insert_markdown_content_after_paragraph(
     paragraph: Paragraph,
     content: str,
     style_map=DEFAULT_STYLE_MAP,
-) -> None:
+) -> list:
     """Insert markdown content (including lists, headings, soft breaks) after a paragraph.
 
     Uses the unified process_markdown_content() which handles all markdown
@@ -89,6 +89,10 @@ def _insert_markdown_content_after_paragraph(
         paragraph: The paragraph after which to insert content
         content: The markdown content to insert
         style_map: Style mapping for rendered block content (see StyleMap).
+
+    Returns:
+        The list of inserted XML elements (``<w:p>`` / ``<w:tbl>``), in order, so
+        the caller can post-process them (e.g. propagate the placeholder format).
     """
     try:
         # Process content and get detached elements
@@ -102,8 +106,10 @@ def _insert_markdown_content_after_paragraph(
 
         for offset, elem in enumerate(new_elements, start=1):
             body.insert(para_idx + offset, elem)
+        return new_elements
     except Exception as e:
         logger.error("Failed to insert markdown content after paragraph: %s", e, exc_info=True)
+        return []
 
 
 def find_docx_template_by_name(filename: str) -> Optional[str]:
@@ -139,6 +145,31 @@ def _add_formatted_segments(paragraph, segments) -> None:
     """Append *segments* (``(text, source_run)`` pairs) as runs, keeping format."""
     for seg_text, seg_run in segments:
         _copy_run_format(seg_run, paragraph.add_run(seg_text))
+
+
+def _propagate_format_to_block(doc, inserted, src_ppr, fmt) -> None:
+    """Give *inserted* default-styled paragraphs the placeholder's look.
+
+    Paragraphs the markdown styled deliberately (headings, list items, quotes,
+    code — i.e. those with an explicit ``<w:pStyle>``) are left untouched. Plain
+    (default/Normal) paragraphs inherit the placeholder paragraph's properties
+    *src_ppr* (style/alignment/indent/spacing) and the placeholder run's character
+    format *fmt*, so e.g. a justified letter body stays justified instead of
+    falling back to the document default.
+    """
+    for elem in inserted:
+        if elem.tag != qn('w:p'):
+            continue  # tables etc. are not styled here
+        ppr = elem.find(qn('w:pPr'))
+        # An explicit paragraph style means the markdown set the look on purpose.
+        if ppr is not None and ppr.find(qn('w:pStyle')) is not None:
+            continue
+        if src_ppr is not None:
+            if ppr is not None:
+                elem.remove(ppr)
+            elem.insert(0, copy.deepcopy(src_ppr))  # pPr must be the paragraph's first child
+        for run in Paragraph(elem, doc._body).runs:
+            _apply_placeholder_format(run, fmt)
 
 
 def _segments_for_range(run_info, lo: int, hi: int):
@@ -213,6 +244,11 @@ def _replace_placeholder_in_paragraph(
         if placeholder not in full_text:
             return False
 
+        # Normalise literal "\n"/"\r\n" the model may have written as text (rather
+        # than real newlines) so block detection and rendering below treat them as
+        # genuine line breaks instead of leaving stray "n" characters.
+        value = normalize_escaped_newlines(value)
+
         # Collect all runs and their text
         runs = list(paragraph.runs)
         if not runs:
@@ -270,6 +306,25 @@ def _replace_placeholder_in_paragraph(
         # Check if the value contains block-level content (lists, headings)
         has_block_content = contains_block_markdown(value)
 
+        # A MULTI-LINE whole-paragraph placeholder (no surrounding text) is rendered
+        # through the SAME markdown pipeline as the base tool, so newline handling is
+        # identical everywhere: a line break starts a new paragraph; soft breaks use
+        # <br> or two trailing spaces. Block content is always routed there too. A
+        # single-line value, a placeholder in the MIDDLE of a paragraph, or one in a
+        # table/header (doc is None) stays inline (soft breaks only) — a single line
+        # needs no splitting and a sentence cannot be split into separate paragraphs.
+        is_whole_paragraph = not before_segments and not after_segments
+        use_block = (
+            doc is not None
+            and value.strip() != ""
+            and (has_block_content or (is_whole_paragraph and "\n" in value))
+        )
+
+        # Capture the placeholder paragraph's own properties so produced paragraphs
+        # can inherit them (see _propagate_format_to_block).
+        existing_ppr = paragraph._p.find(qn('w:pPr'))
+        src_ppr = copy.deepcopy(existing_ppr) if existing_ppr is not None else None
+
         # Clear all existing runs
         p_element = paragraph._p
         for run in runs:
@@ -278,20 +333,23 @@ def _replace_placeholder_in_paragraph(
         # Re-add the text before the placeholder, preserving its formatting.
         _add_formatted_segments(paragraph, before_segments)
 
-        if has_block_content and doc is not None:
-            # Insert block content after this paragraph
-            _insert_markdown_content_after_paragraph(doc, paragraph, value, style_map)
+        if use_block:
+            # Render via the base-tool pipeline and give the produced plain
+            # paragraphs the placeholder's style/format (headings/lists keep theirs).
+            inserted = _insert_markdown_content_after_paragraph(doc, paragraph, value, style_map)
+            _propagate_format_to_block(doc, inserted or [], src_ppr, placeholder_format)
 
             # Re-add the text after the placeholder, preserving its formatting.
             _add_formatted_segments(paragraph, after_segments)
 
-            # If the placeholder occupied the whole paragraph (no surrounding text),
-            # the paragraph is now empty – remove it to avoid a spurious blank line.
-            if not before_segments and not after_segments:
+            # If the placeholder occupied the whole paragraph it is now empty –
+            # remove it so the produced paragraphs take its place cleanly.
+            if is_whole_paragraph:
                 p_element.getparent().remove(p_element)
         else:
-            # Simple inline replacement. Parse the value into runs, then fill any
-            # formatting it left unset from the placeholder run's captured format.
+            # Inline replacement: parse the value into runs of THIS paragraph
+            # (newlines / <br> become soft breaks), then fill any formatting the
+            # markdown left unset from the placeholder run's captured format.
             runs_before_value = len(paragraph.runs)
             parse_inline_formatting(value, paragraph)
             for run in list(paragraph.runs)[runs_before_value:]:

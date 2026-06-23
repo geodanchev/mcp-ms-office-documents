@@ -5,6 +5,7 @@ docx_tools package can import them without circular dependencies.
 """
 
 import re
+import string
 
 # ---------------------------------------------------------------------------
 # Block-level patterns (compiled once, used by many modules)
@@ -58,7 +59,17 @@ _INLINE_FORMAT_RE = re.compile(
 )
 
 _LINK_RE = re.compile(r'\[(.*?)]\((.*?)\)')        # [link text](url)
-_ESCAPE_RE = re.compile(r'\\(.)')                   # backslash-escaped character
+# A backslash escapes only the ASCII punctuation markdown uses as markers
+# (\*, \`, \., \\ …). It must NOT swallow the backslash before other characters:
+# a bare "\n" is the two literal characters backslash+n, not a markdown escape,
+# and the old r'\\(.)' collapsed it to a stray "n" (and corrupted "\t", Windows
+# paths like C:\new, etc.). Literal "\n"/"\r\n" sequences are turned into real
+# line breaks separately by normalize_escaped_newlines().
+_ESCAPE_RE = re.compile(r'\\([' + re.escape(string.punctuation) + r'])')
+# Literal newline escape sequences ("\n", "\r\n", "\r" written as text) that LLMs
+# often emit instead of a real newline. Longest alternative first so "\r\n"
+# collapses to a single break rather than two.
+_ESCAPED_NEWLINE_RE = re.compile(r'\\r\\n|\\[nr]')
 
 # ---------------------------------------------------------------------------
 # Alignment patterns
@@ -92,6 +103,22 @@ _BR_RE = re.compile(r'<br\s*/?>', re.IGNORECASE)
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
+def normalize_escaped_newlines(text: str) -> str:
+    """Turn literal newline escape sequences into real newlines.
+
+    LLMs frequently emit a newline as the two literal characters ``\\n`` (or
+    ``\\r\\n``) inside a tool argument instead of a real line break — often
+    because tool/argument descriptions demonstrate ``\\n`` as if it were syntax.
+    Left untouched, the backslash handler would strip the slash and leave a
+    stray ``n`` while the paragraph break is lost. Converting these sequences to
+    real newlines up front makes a literal ``\\n`` behave exactly like a genuine
+    newline (line/paragraph break) throughout the renderer.
+    """
+    if not text:
+        return text
+    return _ESCAPED_NEWLINE_RE.sub('\n', text)
+
 
 def ordered_list_is_genuine(lines, idx) -> bool:
     """Return True if the ordered-list marker at ``lines[idx]`` should start a list.
