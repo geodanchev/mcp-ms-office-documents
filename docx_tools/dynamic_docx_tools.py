@@ -190,15 +190,22 @@ def _propagate_format_to_block(doc, inserted, src_ppr, fmt) -> None:
     for elem in inserted:
         if elem.tag != qn('w:p'):
             continue  # tables etc. are not styled here
+        para = Paragraph(elem, doc._body)
         ppr = elem.find(qn('w:pPr'))
         # An explicit paragraph style means the markdown set the look on purpose.
         if ppr is not None and ppr.find(qn('w:pStyle')) is not None:
             continue
         if layout_ppr is not None:
+            # Preserve a deliberate markdown alignment (e.g. <center>, <div align>)
+            # across the pPr swap so it wins over the placeholder's own alignment;
+            # re-apply via the API so <w:jc> lands in schema order.
+            own_alignment = para.alignment
             if ppr is not None:
                 elem.remove(ppr)
             elem.insert(0, copy.deepcopy(layout_ppr))  # pPr must be the paragraph's first child
-        for run in Paragraph(elem, doc._body).runs:
+            if own_alignment is not None:
+                para.alignment = own_alignment
+        for run in para.runs:
             _apply_placeholder_format(run, fmt)
 
 
