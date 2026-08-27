@@ -2,6 +2,8 @@
 
 # 📄 MCP Office Documents Server
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FForLegalAI%2Fmcp-ms-office-documents.svg)](https://mcptoplist.com/server/glama%2FForLegalAI%2Fmcp-ms-office-documents)
+
 **Let your AI assistant create professional Office documents — PowerPoint, Word, Excel, emails & XML — with a single prompt.**
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](https://hub.docker.com/)
@@ -47,7 +49,7 @@ Just ask your AI to _"create a sales presentation"_ or _"draft a welcome email"_
 
 All tools accept an optional **`file_name`** parameter. When provided, the output file will use that name (without extension) instead of a randomly generated identifier.
 
-All tools also accept an optional **`add_unique_prefix`** parameter (default `false`). When `false`, filenames are clean without UUID prefix (e.g., `My_Report.docx`). When `true`, adds an 8-character UUID prefix for server-side uniqueness (e.g., `ff8ae81d_My_Report.docx`). In most cases, the default is sufficient because LibreChat adds its own UUID prefix during file storage.
+All tools also accept an optional **`add_unique_prefix`** parameter. Left unset, it follows the storage backend: `true` for `LOCAL`/`S3`/`GCS`/`AZURE`/`MINIO`, where an 8-character UUID prefix prevents collisions in shared storage (e.g., `ff8ae81d_My_Report.docx`), and `false` for LibreChat, which adds its own UUID prefix during file storage. Set it explicitly to override — `false` gives clean filenames (e.g., `My_Report.docx`).
 
 **Bonus — Dynamic Templates:**
 
@@ -123,6 +125,8 @@ Clients can send the key in any of these headers:
 | `x-api-key` | `your-secret-key` |
 
 Leave `API_KEY` empty or unset to allow all requests without authentication.
+
+The health-probe routes (`/healthz`, `/readyz`, `/livez`) are the one exception — they stay reachable without a key so orchestrators can poll them. See **🏥 Performance & Health Probes** below.
 
 </details>
 
@@ -201,14 +205,57 @@ Make sure the bucket exists and your credentials have `PutObject`/`GetObject` pe
 </details>
 
 <details>
+<summary><strong>💬 LibreChat Integration (Experimental)</strong></summary>
+
+> ⚠️ **Note:** This feature is **not yet implemented in the official LibreChat repository**. It requires a custom LibreChat build with MCP file artifact support. A test version is available at:
+> 
+> 👉 https://github.com/geodanchev/LibreChat/tree/feature/mcp-ms-office-docs-integration
+
+Set `UPLOAD_STRATEGY=LIBRECHAT` to enable seamless document generation within LibreChat conversations. Documents are uploaded to LibreChat's service endpoint and returned as MCP file artifacts that appear as attachments in the chat UI.
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `LIBRECHAT_SERVICE_URL` | Full URL to LibreChat's service files endpoint | ✅ |
+| `LIBRECHAT_SERVICE_TOKEN` | Service token for authentication (must match `MCP_SERVICE_TOKEN` in LibreChat) | ✅ |
+
+**Typical URLs:**
+- Inside Docker network: `http://api:3080/api/service/files`
+- Local development: `http://localhost:3080/api/service/files`
+
+**Generate a service token:**
+```bash
+openssl rand -hex 32
+```
+
+**LibreChat `librechat.yaml` configuration:**
+```yaml
+mcpServers:
+  Office-documents:
+    type: streamable-http
+    url: http://mcp-office-docs:8958/mcp
+    headers:
+      X-User-Id: "{{LIBRECHAT_USER_ID}}"
+      X-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
+```
+
+The `X-User-Id` and `X-User-Email` headers are automatically populated by LibreChat and used to associate uploaded files with the correct user.
+
+</details>
+
+<details>
 <summary><strong>🏥 Performance & Health Probes</strong></summary>
 
-The server exposes health-check endpoints that Kubernetes (or any orchestrator) can use for liveness/readiness probes:
+The server exposes health-check endpoints that Kubernetes (or any orchestrator) can use for startup/readiness/liveness probes. Each returns `200` with a short plain-text body:
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /health` | Basic liveness check |
-| `GET /readiness` | Readiness check |
+| Endpoint | Probe | Body |
+|----------|-------|------|
+| `GET /healthz` | `startupProbe` — the pod has started | `ok` |
+| `GET /readyz` | `readinessProbe` — the pod can receive traffic | `ready` |
+| `GET /livez` | `livenessProbe` — the event loop is responsive; restart on failure | `alive` |
+
+> **These three routes are not protected by `API_KEY`.** They are registered at the Starlette layer (via FastMCP's `@custom_route`), so they sit outside the MCP middleware stack and deliberately bypass the API-key check described under **🔐 Authentication** above — this lets kubelet poll them without credentials. They expose no data beyond the static strings above.
+
+Use HTTP probes rather than TCP ones: a TCP probe only proves the socket still accepts connections, so a wedged Python process with a bound listener would never be restarted. An HTTP probe forces the application itself to answer.
 
 **Thread-pool offloading:** By default (`RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED=true`), all blocking document-generation work is dispatched to a bounded thread pool (`RUN_BLOCKING_MAX_WORKERS` threads, default 4). This keeps the asyncio event loop free to respond to health probes and handle concurrent requests — critical for Kubernetes deployments where blocked probes lead to pod restarts.
 
@@ -296,7 +343,7 @@ Nesting and combinations work, e.g. `**bold with *italic* inside**`, `**~~bold s
 This paragraph uses the "Callout" style from your template.
 ```
 
-The `<!-- style: Name -->` directive applies a style to the next block only (every item of a list, or the table). Unknown styles fall back to the default with a warning. To remap styles globally or per template, see [Custom Templates](#-custom-templates).
+The `<!-- style: Name -->` directive applies a style to the next block only — one paragraph, one heading, the whole table, or the top-level items of a list (nested items keep the `List Bullet 2/3` / `List Number 2/3` styles). On a numbered list the style's **own numbering** is used: the list restarts at `1.` with the style's numeral format and indents. The directive must be alone on its line, and the name must match the Word style name exactly. Unknown styles fall back to the default with a warning. To remap styles globally or per template, see [Custom Templates](#-custom-templates).
 
 </details>
 
@@ -324,10 +371,29 @@ The `<!-- style: Name -->` directive applies a style to the next block only (eve
 | Reference form | Meaning |
 |----------------|---------|
 | `=A1`, `=SUM(A1:A5)` | Standard Excel references and functions |
-| `[offset]` | Row-relative reference within the column (e.g. `=[−1]*1.2`) |
-| `T1.B[0]` | Table 1, column B, data row 0 |
+| `B[0]` | **Current row**, column B — moves with the formula. `B[-1]` is the row above, `B[1]` the row below |
+| `SUM(B[-3]:B[-1])` | Range over the current row's neighbours |
+| `T1.B[0]` | **Table-relative**: table 1, column B, first data row — a fixed cell, does not move |
 | `T1.SUM(B[0]:E[0])` | Function over a table range |
 | `SheetName!T1.B[0]` | Cross-sheet table reference |
+
+The two `[n]` forms are different on purpose. Write `=B[0]*C[0]` in every data
+row to get a per-row calculation; use `T1.B[0]` to point every row at one fixed
+cell, such as a total or a shared assumption. The first data row is index `[0]`
+— the header is not counted.
+
+```markdown
+| Month | Sales | Cumulative  | Growth        |
+|-------|-------|-------------|---------------|
+| Jan   | 100   | =B[0]       |               |
+| Feb   | 200   | =C[-1]+B[0] | =B[0]/B[-1]-1 |
+| Mar   | 300   | =C[-1]+B[0] | =B[0]/B[-1]-1 |
+| Total | =SUM(T1.B[0]:T1.B[2]) | | |
+```
+
+Circular references (a formula that depends on itself, directly or through a
+chain) are detected during generation and reported in the server log — Excel
+would otherwise show a warning dialog and silently resolve those cells to 0.
 
 **Column directives** — place on the line directly above a table:
 
@@ -335,6 +401,54 @@ The `<!-- style: Name -->` directive applies a style to the next block only (eve
 |-----------|--------|
 | `<!-- freeze -->` | Freeze panes below the header row (header stays visible when scrolling) |
 | `<!-- types: text, currency:$, date, bool, number, percent -->` | Force per-column data types (one entry per column; blank = auto). Options: `text` (preserves leading zeros), `currency:<symbol>` (`$ € £ ¥ Kč zł kr CHF R$ ₹`), `date` / `date:<format>`, `bool`, `number` / `number:<format>`, `percent` (`50%` → `0.5`) |
+| `<!-- styles: B2=bg:yellow, C[0]:C[3]=color:red;bold -->` | Set cell background and font colour (see below) |
+
+**Cell styling.** Comma-separated `<target>=<attributes>` entries; attributes separated by `;`.
+
+| Target | Meaning |
+|--------|---------|
+| `B2` | Absolute worksheet cell |
+| `B[0]` | Table-relative — first data row of this table; `B[-1]` is the header |
+| `B2:D5`, `C[0]:C[3]` | A rectangular block in either form |
+
+| Attribute | Effect |
+|-----------|--------|
+| `bg:<colour>` | Background fill |
+| `color:<colour>` | Font colour |
+| `bold`, `italic`, `underline` | Font weight and decoration |
+| `style:<Name>` | A named style from your Excel template (see below) |
+
+Colours are 6-digit hex (`FFFF00` or `#FFFF00`) or a name: `red`, `darkred`,
+`orange`, `yellow`, `green`, `darkgreen`, `blue`, `darkblue`, `purple`, `pink`,
+`brown`, `grey`, `lightgrey`, `darkgrey`, `cyan`, `magenta`, `black`, `white`
+(`gray` spellings work too).
+
+```markdown
+<!-- styles: A[-1]:D[-1]=bg:darkblue;color:white;bold, D[3]=bg:yellow;bold -->
+| Month | Sales | Costs | Profit        |
+|-------|-------|-------|---------------|
+| Jan   | 100   | 60    | =B[0]-C[0]    |
+| Feb   | 200   | 90    | =B[0]-C[0]    |
+| Mar   | 300   | 120   | =B[0]-C[0]    |
+| Total | =SUM(T1.B[0]:T1.B[2]) | =SUM(T1.C[0]:T1.C[2]) | =SUM(T1.D[0]:T1.D[2]) |
+```
+
+Styling overrides the built-in header and formula colouring and never changes
+a cell's value. The `bg:` / `color:` / `bold` / `italic` / `underline`
+attributes touch nothing else — number format, borders and alignment survive.
+A `style:` reference can also carry a number format, border or alignment if
+the template's style declares one; where it doesn't, the cell keeps what the
+table gave it. An unrecognised colour or malformed entry is logged and skipped
+— it never costs you the document.
+
+**Named styles from your own template.** Drop an `.xlsx` containing named cell
+styles at `custom_templates/custom_xlsx_template.xlsx`; every style in it
+becomes referenceable as `style:<Name>`. This keeps a house look in one file
+rather than repeating hex codes in every document:
+
+```markdown
+<!-- styles: B[3]=style:Total, C[0]=style:Warning -->
+```
 
 Column alignment via the `:---:` separator syntax is honored, and inline `**bold**` / `*italic*` in cells is applied as cell formatting.
 
