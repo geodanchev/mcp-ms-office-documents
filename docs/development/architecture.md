@@ -64,7 +64,10 @@ call, so tests can flip it without reloading the module.
 
 Every static document tool follows the same path. The Word, Excel and
 PowerPoint tools carry a warnings channel back out alongside the file; the
-template-listing tool skips the upload.
+template-listing tool skips the upload. Dynamic template tools use the same
+stages with their own handler in place of `main.py` and no warnings channel,
+except that they read the user context *before* dispatching the build rather
+than after; see [Dynamic template tools](#dynamic-template-tools).
 
 ```
 MCP client
@@ -134,18 +137,31 @@ must follow the same split; see [`adding-a-tool.md`](adding-a-tool.md).
 ### Dynamic template tools
 
 Tools registered from YAML (`docx_tools/dynamic_docx_tools.py`,
-`email_tools/dynamic_email_tools.py`) take a shorter path. Each registration
-builds a Pydantic model with `create_model()` from the template's declared
-arguments, then registers an `async def` handler whose body is
-`await run_blocking(_sync_impl, data)`. That single synchronous body loads the
-template, substitutes placeholders, saves to a buffer, **and calls
-`upload_file()` itself**. It does not go through `upload_and_format_response`,
-so it is never dispatched twice.
+`email_tools/dynamic_email_tools.py`) take the **same** path as the static
+ones. Each registration builds a Pydantic model with `create_model()` from the
+template's declared arguments, then registers an `async def` handler that:
 
-Consequence worth knowing: `upload_file()` is the synchronous entry point and
-refuses the `LIBRECHAT` strategy with a `RuntimeError`. Dynamic template tools
-therefore do not work under `UPLOAD_STRATEGY=LIBRECHAT` today. The static tools
-do. Tracked in [#113](https://github.com/ForLegalAI/mcp-ms-office-documents/issues/113); see [`dynamic-templates.md`](dynamic-templates.md).
+1. calls `extract_user_context_from_request()` on the event loop, while the
+   request context is still alive;
+2. dispatches the **build only** — `await run_blocking(_build, data)`, which
+   loads the template, substitutes placeholders and returns
+   `(BytesIO, filename, add_unique_prefix)`; `_build()` never uploads and never
+   closes the buffer;
+3. awaits `upload_and_format_response(...)` on the loop and closes the buffer
+   in a `finally`.
+
+So the handler returns `Union[str, dict]` — a URL string from a traditional
+backend, a LibreChat file artifact under `UPLOAD_STRATEGY=LIBRECHAT` — and
+dynamic template tools work under every strategy, as the static tools do.
+
+The ordering is the load-bearing part, and it is what
+[#113](https://github.com/ForLegalAI/mcp-ms-office-documents/issues/113) was:
+uploading from inside the offloaded body hit the synchronous `upload_file()`,
+which refuses `LIBRECHAT` with a `RuntimeError`, and reading the headers after
+dispatch finds no request at all, since `run_blocking()` hands the callable to
+`loop.run_in_executor()` without copying contextvars. Build on the worker
+thread, upload on the loop, read the context before either. See
+[`dynamic-templates.md`](dynamic-templates.md).
 
 ## Threading model
 
@@ -170,13 +186,16 @@ Rules that follow from this:
 
 1. Every tool handler is `async def` and calls blocking work only through
    `await run_blocking(...)`. Call sites never branch on the flag.
-2. Static tools dispatch **twice**: once for the build, once for the upload
-   (inside `upload_and_format_response`). Dynamic tools dispatch **once** with
-   a body that does both. Do not route a dynamic tool through
-   `upload_and_format_response`.
-3. Nothing inside a buffer function may touch the request context. Request
+2. Every tool — static or dynamic — dispatches **twice**: once for the build,
+   once for the upload (the traditional branch inside
+   `upload_and_format_response`). A tool body never uploads on the same
+   dispatch that built the file: the LIBRECHAT branch has to be awaited, so an
+   upload started on a worker thread cannot reach it.
+3. Nothing inside a build function may touch the request context. Request
    headers are read on the event loop by `extract_user_context_from_request()`
-   before dispatch.
+   before dispatch, because `run_blocking()` calls `loop.run_in_executor()`
+   without `contextvars.copy_context()` — there is no request to read on the
+   worker thread.
 
 ## Error mapping
 
@@ -186,7 +205,7 @@ Rules that follow from this:
 | PowerPoint slides | `ValueError` from `coerce_slides()`, raised inside the build step | `ToolError` carrying the message verbatim, e.g. `slide 2 -> rows.0: …` |
 | Upload dispatcher and backends | `RuntimeError` | wrapped by the handler as above |
 | LibreChat without `X-User-Id` | `ValueError` | wrapped by the handler as above |
-| Dynamic tool body | any `Exception` | `ToolError("Error generating document from template <name>: …")`, and `metrics.record_error()` is called |
+| Dynamic tool body | any `Exception` from build or upload | `ToolError` naming the template — `"Error generating document from template <name>: …"` for Word, `"Error creating email draft for template '<name>': …"` or `"Error generating email from template '<name>': …"` for email — and `metrics.record_error()` is called. `metrics.record_call()` fires only after the upload has also succeeded |
 | Auth middleware | `fastmcp.exceptions.AuthorizationError` | MCP error response; the tool is never invoked |
 | Configuration at startup | `ValueError("Invalid configuration: …")` | process exits |
 

@@ -64,8 +64,13 @@ backend → URL string or LibreChat artifact dict. Details:
   a buffer function or `upload_file()` directly from an `async def` handler.
 - Read request headers on the event loop, before dispatch; never inside a
   buffer function.
-- Dynamic template tools call `upload_file()` inside their own offloaded
-  body and do **not** go through `upload_and_format_response()`.
+- Dynamic template tools follow the same split as the static ones: the
+  offloaded body **builds only** and returns `(BytesIO, filename,
+  add_unique_prefix)`, and the tool's `async def` reads the user context, then
+  uploads through `upload_and_format_response()` on the event loop and closes
+  the buffer in a `finally`. Never upload from inside the offloaded body: the
+  LIBRECHAT strategy needs an awaitable upload, and the request headers are
+  unreadable on a worker thread.
 - Config: read via `get_config()`; never `os.environ` outside `config.py`.
   A new variable goes into `config.py`, `.env.example` and
   `docs/configuration.md`; `tests/test_config_docs.py` enforces it.

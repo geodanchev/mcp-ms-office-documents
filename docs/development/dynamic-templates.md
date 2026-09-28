@@ -93,19 +93,38 @@ follow the same steps:
 3. **Expose the model in module globals.** FastMCP resolves the handler's
    annotation by name against the module namespace when it builds the
    schema, so the class must be importable from there.
-4. **Register an `async def` handler** whose body is
-   `await run_blocking(_sync_impl, data)`. The synchronous body renders,
-   assembles the file and uploads it in one go. See
-   [`architecture.md`](architecture.md#dynamic-template-tools) for why it does
-   not go through the shared upload helper.
+4. **Register an `async def` handler** that splits build from upload, exactly
+   as the static tools in `main.py` do:
+
+   ```
+   extract_user_context_from_request()          # event loop, request alive
+   await run_blocking(_build, data)             # worker thread: render only
+       -> (buffer, filename, add_unique_prefix)
+   await upload_and_format_response(...)        # event loop: upload + format
+   buffer.close()                               # in a finally
+   ```
+
+   `_build()` renders the template and returns the bytes; it never uploads and
+   never closes the buffer, because the upload still has to read it. The
+   handler returns `Union[str, dict]`: a URL string from a traditional
+   backend, a LibreChat file artifact under `UPLOAD_STRATEGY=LIBRECHAT`.
+
+   The order is the whole point. `upload_file()` is synchronous and refuses
+   the LIBRECHAT strategy, so the upload has to be awaited; and
+   `extract_user_context_from_request()` reads FastMCP's contextvar-based
+   request, which `run_blocking()` does not carry onto a worker thread
+   (`loop.run_in_executor()` without `contextvars.copy_context()`), so the
+   headers have to be read before dispatch. Doing either the other way round
+   is [#113](https://github.com/ForLegalAI/mcp-ms-office-documents/issues/113) again.
 5. **Record the registration** in a lock-guarded module dict so the admin
    Status page can list live tools.
 
 ### Rendering, Word
 
-The `_sync_impl` body opens the template with python-docx, runs
+The `_build()` body opens the template with python-docx, runs
 `conditionals.resolve_conditionals()` with the argument payload, then
-`_replace_placeholders_in_document()` with every value stringified.
+`_replace_placeholders_in_document()` with every value stringified, and hands
+the saved buffer back to the handler to upload.
 
 Placeholder replacement is the intricate part. Word splits text across runs
 as it is edited, so `{{name}}` is often three runs. `_replace_placeholder_in_paragraph()`
@@ -193,7 +212,7 @@ by `tests/test_dynamic_args_schema.py`.
 - **A description is a sibling of a flat type.** Same reason.
 - **`add_unique_prefix` has no default in the tool body.** The payload is
   built only from declared args, so `payload.get("add_unique_prefix")` yields
-  `None` for a template that does not declare it, and `upload_file()` then
+  `None` for a template that does not declare it, and the upload layer then
   applies the strategy default. A `False` default here would suppress the
   prefix on every backend.
 
@@ -214,10 +233,6 @@ template name, for the filename.
 
 ## Known limitations
 
-- **Unavailable under `UPLOAD_STRATEGY=LIBRECHAT`** ([#113](https://github.com/ForLegalAI/mcp-ms-office-documents/issues/113)). The tool body calls the
-  synchronous `upload_file()`, which refuses that strategy. Fixing this means
-  reading the user context on the event loop before dispatch and calling
-  `upload_file_async()` from an async body, mirroring the static tools.
 - **Single instance.** Live registration assumes one process owns the
   template files. With replicas, use shared storage and restart.
 - **Block content is body-only** in Word templates; see rendering above.
@@ -231,6 +246,7 @@ template name, for the filename.
 | `tests/test_docx_placeholder_formatting.py` | Run formatting preserved through replacement |
 | `tests/test_docx_conditionals.py` | Marker parsing, balance, nesting, unknown names |
 | `tests/test_dynamic_args_schema.py` | The flat-schema rules for both kinds |
+| `tests/test_dynamic_template_librechat.py` | Both kinds under `LIBRECHAT` and `LOCAL`: the artifact vs. URL return, the user context read before dispatch, and a missing `X-User-Id` failing instead of uploading |
 | `tests/test_template_registry.py` | `gather_specs()` merging and live (un)registration |
 | `tests/test_admin_template_lifecycle.py` | `enabled: false` across the merge, the loaders and a restart |
 | `tests/test_template_store.py`, `tests/test_admin_app.py` | The admin store and UI paths that write `.d` files |

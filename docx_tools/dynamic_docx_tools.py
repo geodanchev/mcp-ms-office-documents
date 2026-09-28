@@ -34,7 +34,7 @@ import copy
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict, Optional, Literal, Union
 
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
@@ -43,7 +43,10 @@ from docx.table import Table
 from pydantic import Field, create_model
 from fastmcp import FastMCP
 
-from upload_tools import upload_file
+from librechat_integration import (
+    extract_user_context_from_request,
+    upload_and_format_response,
+)
 from template_utils import find_file_in_template_dirs
 from template_registry import gather_specs, safe_remove_tool
 from async_runner import run_blocking
@@ -717,55 +720,76 @@ def _register_single_template(mcp: FastMCP, spec: Dict[str, Any],
 
     # Create the tool function.
     #
-    # The tool body (`_sync_impl`) is synchronous and performs blocking
-    # work: opening the .docx zip, mustache-style placeholder
-    # substitution, and synchronous upload to the configured backend.
-    # It is wrapped in an `async def` (`tool_impl`) that dispatches the
-    # call through `run_blocking()`, so the work either runs on a
-    # bounded worker thread (the default) or inline on the event loop
-    # (when RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED is false).
-    # FastMCP awaits the async tool directly, leaving dispatch entirely
-    # to our helper — keeping behaviour consistent with the static tools
-    # in main.py.
+    # Build and upload are separate steps, exactly as in the static tools in
+    # main.py. `_build()` is synchronous and blocking — it opens the .docx
+    # zip, resolves conditionals and substitutes placeholders — so it is
+    # dispatched through `run_blocking()`, which runs it on a bounded worker
+    # thread (the default) or inline on the event loop (when
+    # RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED is false). The upload then runs
+    # on the event loop through `upload_and_format_response()`. That split is
+    # what makes `UPLOAD_STRATEGY=LIBRECHAT` reachable here: its upload is
+    # awaitable, and the user context it needs is read from the live HTTP
+    # request *before* dispatch — a worker thread has no request context to
+    # read, because run_blocking() does not copy contextvars (#113).
     def make_tool_fn(_model=model, _template_path=resolved, _name=name,
                      _style_map=style_map):
-        def _sync_impl(data):
+        def _build(data):
+            """Render the template on the worker thread.
+
+            Returns ``(buffer, filename, add_unique_prefix)``. It must not
+            upload and must not close the buffer — the caller owns both, and
+            the bytes have to survive until the upload has read them.
+            """
+            # Load the template document
+            doc = DocxDocument(_template_path)
+
+            # Build context from input data
+            payload = data.model_dump()
+
+            # Resolve conditional blocks ({{#if flag}} ... {{/if}}) before
+            # substitution, since this prunes whole block elements.
+            resolve_conditionals(doc, payload)
+
+            context = {k: ("" if v is None else str(v)) for k, v in payload.items()}
+
+            # Replace placeholders
+            _replace_placeholders_in_document(doc, context, _style_map)
+
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+
+            return (
+                buffer,
+                payload.get("file_name") or _name,
+                # Absent → None, so the upload layer applies the
+                # strategy-based default (prefix on for LOCAL/S3/GCS/AZURE/
+                # MINIO, off for LIBRECHAT). Passing False here would pin
+                # every template upload to "no prefix".
+                payload.get("add_unique_prefix"),
+            )
+
+        async def tool_impl(data: _model) -> Union[str, dict]:  # type: ignore
             try:
-                # Load the template document
-                doc = DocxDocument(_template_path)
+                # Read the request headers here, on the event loop, while the
+                # request context is still alive.
+                user_context = extract_user_context_from_request()
 
-                # Build context from input data
-                payload = data.model_dump()
-
-                # Resolve conditional blocks ({{#if flag}} ... {{/if}}) before
-                # substitution, since this prunes whole block elements.
-                resolve_conditionals(doc, payload)
-
-                context = {k: ("" if v is None else str(v)) for k, v in payload.items()}
-
-                # Replace placeholders
-                _replace_placeholders_in_document(doc, context, _style_map)
-
-                # Save to buffer and upload
-                buffer = io.BytesIO()
+                buffer, filename, add_unique_prefix = await run_blocking(_build, data)
                 try:
-                    doc.save(buffer)
-                    buffer.seek(0)
-
-                    result = upload_file(
+                    result = await upload_and_format_response(
                         buffer,
                         "docx",
-                        filename=payload.get("file_name") or _name,
-                        # Absent → None, so upload_file() applies the
-                        # strategy-based default (prefix on for LOCAL/S3/GCS/
-                        # AZURE/MINIO, off for LIBRECHAT). Passing False here
-                        # would pin every template upload to "no prefix".
-                        add_unique_prefix=payload.get("add_unique_prefix"),
+                        filename,
+                        user_context,
+                        f"Word document '{filename}' created successfully.",
+                        add_unique_prefix=add_unique_prefix,
                     )
                 finally:
                     buffer.close()
 
                 logger.info(f"[dynamic-docx] Document generated from template {_name}")
+                # A call counts as one only once the upload succeeded too.
                 metrics.record_call("docx", _name)
                 return result
 
@@ -774,11 +798,8 @@ def _register_single_template(mcp: FastMCP, spec: Dict[str, Any],
                 logger.error(f"[dynamic-docx] Error generating document from {_name}: {e}", exc_info=True)
                 raise ToolError(f"Error generating document from template {_name}: {e}")
 
-        async def tool_impl(data: _model) -> str:  # type: ignore
-            return await run_blocking(_sync_impl, data)
-
         tool_impl.__annotations__['data'] = _model  # type: ignore[index]
-        tool_impl.__annotations__['return'] = str  # type: ignore[index]
+        tool_impl.__annotations__['return'] = Union[str, dict]  # type: ignore[index]
         return tool_impl
 
     # Register the tool

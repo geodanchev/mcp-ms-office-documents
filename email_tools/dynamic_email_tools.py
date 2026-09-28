@@ -15,10 +15,13 @@ import threading
 from email.mime.text import MIMEText
 from email import encoders
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Union
 from pydantic import Field, create_model
 from fastmcp import FastMCP
-from upload_tools import upload_file
+from librechat_integration import (
+    extract_user_context_from_request,
+    upload_and_format_response,
+)
 from template_utils import find_email_template
 from template_registry import gather_specs, safe_remove_tool
 from async_runner import run_blocking
@@ -175,59 +178,87 @@ def _register_single_email_template(mcp: FastMCP, spec: Dict[str, Any]) -> bool:
 
     renderer = pystache.Renderer(file_encoding="utf-8")
 
-    # Tool body is synchronous and blocking (mustache rendering,
-    # MIME construction, synchronous upload). Wrap it in an
-    # `async def` that dispatches through `run_blocking()` so
-    # behaviour follows the RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED
-    # flag uniformly with the rest of the tools.
+    # Build and upload are separate steps, as in the static tools in main.py.
+    # `_build()` is synchronous and blocking (mustache rendering, MIME
+    # construction), so it is dispatched through `run_blocking()`; the upload
+    # runs on the event loop through `upload_and_format_response()`. That is
+    # what makes `UPLOAD_STRATEGY=LIBRECHAT` reachable here: its upload is
+    # awaitable, and the user context it needs is read from the live HTTP
+    # request before dispatch — a worker thread has no request context to
+    # read, because run_blocking() does not copy contextvars (#113).
     def make_tool_fn(_model=model, _html=html_source, _renderer=renderer, _name=name):
-        def _sync_impl(data):
+        def _build(data):
+            """Render the draft on the worker thread.
+
+            Returns ``(buffer, filename, add_unique_prefix)``. It must not
+            upload and must not close the buffer — the caller owns both, and
+            the bytes have to survive until the upload has read them.
+            """
+            payload = data.model_dump()
+            safe_payload = {k: ("" if v is None else v) for k, v in payload.items()}
+
             try:
-                payload = data.model_dump()
-                safe_payload = {k: ("" if v is None else v) for k, v in payload.items()}
+                html_rendered = _renderer.render(_html, safe_payload)
+            except Exception as e:  # pragma: no cover
+                logger.error(f"[dynamic-email] Error rendering template {_name}: {e}")
+                raise ToolError(f"Error rendering template {_name}: {e}")
 
+            # Mirror static create_eml: single HTML body base64 encoded.
+            msg = MIMEText(html_rendered, 'html', 'utf-8')
+            encoders.encode_base64(msg)  # sets proper Content-Transfer-Encoding and encodes payload
+
+            subject = str(safe_payload.get("subject", ""))
+            if subject:
+                msg['Subject'] = subject
+            for hdr in ("To", "Cc", "Bcc"):
+                key = hdr.lower()
+                val = safe_payload.get(key)
+                if isinstance(val, list) and val:
+                    msg[hdr] = ", ".join(val)
+                elif isinstance(val, str) and val:
+                    msg[hdr] = val
+            msg['X-Unsent'] = '1'
+
+            buffer = io.BytesIO()
+            buffer.write(msg.as_bytes())
+            buffer.seek(0)
+
+            return (
+                buffer,
+                safe_payload.get("file_name") or safe_payload.get("subject") or _name,
+                # Absent → None, so the upload layer applies the
+                # strategy-based default rather than pinning every template
+                # upload to "no prefix". See dynamic_docx_tools.
+                safe_payload.get("add_unique_prefix"),
+            )
+
+        async def tool_impl(data) -> Union[str, dict]:
+            try:
+                # Read the request headers here, on the event loop, while the
+                # request context is still alive.
+                user_context = extract_user_context_from_request()
+
+                buffer, filename, add_unique_prefix = await run_blocking(_build, data)
                 try:
-                    html_rendered = _renderer.render(_html, safe_payload)
-                except Exception as e:  # pragma: no cover
-                    logger.error(f"[dynamic-email] Error rendering template {_name}: {e}")
-                    raise ToolError(f"Error rendering template {_name}: {e}")
-
-                # Mirror static create_eml: single HTML body base64 encoded.
-                msg = MIMEText(html_rendered, 'html', 'utf-8')
-                encoders.encode_base64(msg)  # sets proper Content-Transfer-Encoding and encodes payload
-
-                subject = str(safe_payload.get("subject", ""))
-                if subject:
-                    msg['Subject'] = subject
-                for hdr in ("To", "Cc", "Bcc"):
-                    key = hdr.lower()
-                    val = safe_payload.get(key)
-                    if isinstance(val, list) and val:
-                        msg[hdr] = ", ".join(val)
-                    elif isinstance(val, str) and val:
-                        msg[hdr] = val
-                msg['X-Unsent'] = '1'
-
-                buffer = io.BytesIO()
-                try:
-                    buffer.write(msg.as_bytes())
-                    buffer.seek(0)
-                    result = upload_file(
+                    result = await upload_and_format_response(
                         buffer,
                         "eml",
-                        filename=safe_payload.get("file_name") or safe_payload.get("subject") or _name,
-                        # Absent → None, so upload_file() applies the
-                        # strategy-based default rather than pinning every
-                        # template upload to "no prefix". See dynamic_docx_tools.
-                        add_unique_prefix=safe_payload.get("add_unique_prefix"),
+                        filename,
+                        user_context,
+                        f"Email draft '{filename}' created successfully.",
+                        add_unique_prefix=add_unique_prefix,
                     )
-                    metrics.record_call("email", _name)
-                    return result
-                except Exception as e:  # pragma: no cover
+                except ToolError:
+                    raise
+                except Exception as e:
                     logger.error(f"[dynamic-email] Error creating email draft for template '{_name}': {e}")
                     raise ToolError(f"Error creating email draft for template '{_name}': {e}")
                 finally:
                     buffer.close()
+
+                # A call counts as one only once the upload succeeded too.
+                metrics.record_call("email", _name)
+                return result
 
             except ToolError as e:
                 metrics.record_error("email", _name, str(e))
@@ -237,11 +268,8 @@ def _register_single_email_template(mcp: FastMCP, spec: Dict[str, Any]) -> bool:
                 logger.error(f"[dynamic-email] Unexpected error in tool '{_name}': {e}", exc_info=True)
                 raise ToolError(f"Error generating email from template '{_name}': {e}")
 
-        async def tool_impl(data):
-            return await run_blocking(_sync_impl, data)
-
         tool_impl.__annotations__['data'] = _model  # type: ignore[index]
-        tool_impl.__annotations__['return'] = str  # type: ignore[index]
+        tool_impl.__annotations__['return'] = Union[str, dict]  # type: ignore[index]
         return tool_impl
 
     mcp.tool(name=name, description=description, annotations=annotations, meta=meta)(make_tool_fn())

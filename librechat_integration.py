@@ -125,9 +125,9 @@ async def upload_and_format_response(
         # exact EKS failure mode async_runner.py exists to prevent. Dispatch it
         # the same way the document build itself is dispatched.
         #
-        # The dynamic template tools do NOT come through here: they call
-        # upload_file() from inside their own run_blocking'd body, so they are
-        # already off the loop and must not be double-dispatched.
+        # The dynamic template tools come through here too: their offloaded
+        # body only builds, and the upload is awaited back on the loop, so
+        # this dispatch is theirs as much as a static tool's.
         from upload_tools import upload_file
         return await run_blocking(
             upload_file,

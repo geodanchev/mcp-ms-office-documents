@@ -394,7 +394,12 @@ class TestDynamicTemplateToolDefaults:
 
         tool = self._register(register_docx_template, self.DOCX_SPEC)
 
-        with patch("docx_tools.dynamic_docx_tools.upload_file") as mock_upload:
+        # The dynamic tools upload through upload_and_format_response(), which
+        # looks upload_file up on the upload_tools package at call time, so
+        # that is where it has to be patched. The mock needs a __name__:
+        # run_blocking() logs the callable's name before dispatching it.
+        with patch("upload_tools.upload_file") as mock_upload:
+            mock_upload.__name__ = "upload_file"
             mock_upload.return_value = "http://example.com/result.docx"
             self._call(tool, {"req_arg": "hello"})
 
@@ -407,7 +412,8 @@ class TestDynamicTemplateToolDefaults:
 
         tool = self._register(register_email_template, self.EMAIL_SPEC)
 
-        with patch("email_tools.dynamic_email_tools.upload_file") as mock_upload:
+        with patch("upload_tools.upload_file") as mock_upload:
+            mock_upload.__name__ = "upload_file"
             mock_upload.return_value = "http://example.com/result.eml"
             self._call(tool, {"subject": "hello"})
 
@@ -453,7 +459,8 @@ class TestDynamicTemplateToolDefaults:
         )
         tool = self._register(register_docx_template, spec)
 
-        with patch("docx_tools.dynamic_docx_tools.upload_file") as mock_upload:
+        with patch("upload_tools.upload_file") as mock_upload:
+            mock_upload.__name__ = "upload_file"
             mock_upload.return_value = "http://example.com/result.docx"
             self._call(tool, {"req_arg": "hello"})
 

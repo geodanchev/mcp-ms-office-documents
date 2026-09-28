@@ -287,7 +287,11 @@ class TestTheDynamicToolDiffersOnPurpose:
             captured["bytes"] = buffer.getvalue()
             return "ok"
 
-        with patch("email_tools.dynamic_email_tools.upload_file", side_effect=capture):
+        # The dynamic tool uploads through upload_and_format_response(), which
+        # looks upload_file up on the upload_tools package at call time. It is
+        # replaced by a real function, not a mock: run_blocking() logs the
+        # callable's __name__ before dispatching it.
+        with patch("upload_tools.upload_file", capture):
             # The generated handler takes one `data` model, as the other
             # dynamic-tool tests call it.
             asyncio.run(tool.run({"data": {"subject": "hello", "to": ["a@x.com"]}}))
